@@ -10,23 +10,14 @@ from services.instagram_api import InstagramAPIService
 from services.openai_service import OpenAIService
 from models.schemas import VideoAnalysisRequest, VideoAnalysisResponse, ScrapedVideo, VideoResult
 
-# Load .env file (handle BOM encoding issues)
-env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-OPENAI_API_KEY = None
+# Load environment variables (try .env file first, then system environment)
+load_dotenv()  # This loads from .env if it exists (local development)
 
-# Read .env file directly with UTF-8-sig to handle BOM
-try:
-    with open(env_path, 'r', encoding='utf-8-sig') as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith('OPENAI_API_KEY='):
-                OPENAI_API_KEY = line.split('=', 1)[1].strip()
-                break
-except Exception as e:
-    print(f"[ERROR] Failed to read .env file: {e}")
+# Get API key from environment variable
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY environment variable is required. Please set it in backend/.env file")
+    raise ValueError("OPENAI_API_KEY environment variable is required. Please set it in Render Environment Variables or backend/.env file")
 
 print(f"[DEBUG] Using API key: {OPENAI_API_KEY[:20]}...{OPENAI_API_KEY[-4:]}")
 
