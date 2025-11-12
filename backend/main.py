@@ -35,7 +35,14 @@ app = FastAPI(title="Instagram Video to Sora Script Generator")
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001", 
+        "http://localhost:5173",
+        "https://web-production-2b02d.up.railway.app",
+        "https://*.vercel.app",
+        "*"  # Allow all origins in production (you can restrict this later)
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
