@@ -1,33 +1,18 @@
-import { useState, useRef } from 'react'
+import { useState } from 'react'
 import { Video, Play, FileText, Loader2 } from 'lucide-react'
 import axios from 'axios'
-import SoraVideoPlayer from './components/SoraVideoPlayer'
-import LandingPage from './components/LandingPage'
 import './App.css'
 
-// API URL - uses environment variable for production
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-
 function App() {
-  const [showLanding, setShowLanding] = useState(true)
   const [mode, setMode] = useState('single') // 'single' or 'multi'
   const [username, setUsername] = useState('')
   const [videoLimit, setVideoLimit] = useState(3)
-  const [videoSeconds, setVideoSeconds] = useState(8) // Duration of generated videos (5-16 seconds)
   const [multiUsernames, setMultiUsernames] = useState(['', ''])
   const [videosPerUser, setVideosPerUser] = useState(2)
   const [combineStyle, setCombineStyle] = useState('fusion')
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState(null)
   const [error, setError] = useState(null)
-  const generatorRef = useRef(null)
-
-  const handleGetStarted = () => {
-    setShowLanding(false)
-    setTimeout(() => {
-      generatorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 100)
-  }
 
   const handleAnalyze = async () => {
     if (mode === 'single') {
@@ -49,19 +34,17 @@ function App() {
 
     try {
       if (mode === 'single') {
-        const response = await axios.post(`${API_URL}/api/analyze`, {
+        const response = await axios.post('http://localhost:8000/api/analyze', {
           username: username.trim().replace('@', ''),
-          video_limit: videoLimit,
-          video_seconds: videoSeconds
+          video_limit: videoLimit
         })
         setResults({ type: 'single', data: response.data })
       } else {
         const validUsernames = multiUsernames.filter(u => u.trim()).map(u => u.replace('@', ''))
-        const response = await axios.post(`${API_URL}/api/analyze/multi`, {
+        const response = await axios.post('http://localhost:8000/api/analyze/multi', {
           usernames: validUsernames,
           videos_per_user: videosPerUser,
-          combine_style: combineStyle,
-          video_seconds: videoSeconds
+          combine_style: combineStyle
         })
         setResults({ type: 'multi', data: response.data })
       }
@@ -92,62 +75,30 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Show Landing Page */}
-      {showLanding && <LandingPage onGetStarted={handleGetStarted} />}
-
-      {/* Generator Section */}
-      <div ref={generatorRef} id="generator" className="bg-gradient-to-b from-gray-50 to-white min-h-screen">
-        {/* Header */}
-        <header className="bg-gradient-to-r from-purple-600 via-pink-600 to-blue-600 text-white shadow-lg">
-          <div className="max-w-7xl mx-auto px-4 py-8">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-4xl font-bold">Instagram → Sora Generator</h1>
-                <p className="text-purple-100 text-base mt-2">Scrape Instagram videos, transcribe, and generate Sora AI videos</p>
-              </div>
-              {!showLanding && (
-                <button
-                  onClick={() => setShowLanding(true)}
-                  className="px-6 py-3 bg-white/20 backdrop-blur-sm text-white rounded-xl hover:bg-white/30 transition-all duration-200 border border-white/30"
-                >
-                  ← Back to Home
-                </button>
-              )}
-            </div>
-          </div>
-        </header>
-
-        {/* Main Content */}
-        <main className="max-w-7xl mx-auto px-4 py-12">
-        {/* Sora Feature Notice */}
-        <div className="bg-gradient-to-r from-purple-100 via-pink-100 to-blue-100 border-2 border-purple-300 rounded-2xl p-8 mb-8 shadow-lg">
-          <div className="flex items-start gap-4">
-            <div className="text-3xl">✨</div>
-            <div>
-              <h3 className="text-xl font-bold text-purple-900 mb-3">Sora AI Video Generation Enabled</h3>
-              <p className="text-gray-800 text-sm mb-3 leading-relaxed">
-                This app analyzes Instagram videos and generates <strong>AI-powered video content</strong> using OpenAI's Sora. 
-                Videos are automatically created from your Sora scripts and can be downloaded as MP4 files.
-              </p>
-              <p className="text-gray-700 text-xs">
-                💡 <strong>Tip:</strong> For best results with ≤3 videos, each gets its own generated video. Multi-user mode creates a fusion video combining all styles.
-              </p>
-            </div>
+      {/* Header */}
+      <header className="bg-white border-b border-gray-200 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 py-6">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Instagram → Sora Script</h1>
+            <p className="text-gray-600 text-sm mt-1">Scrape Instagram videos, transcribe, and generate Sora AI prompts</p>
           </div>
         </div>
+      </header>
 
+      {/* Main Content */}
+      <main className="max-w-7xl mx-auto px-4 py-12">
         {/* Input Section */}
-        <div className="bg-white rounded-2xl shadow-xl p-8 mb-8 border border-gray-200">
-          <h2 className="text-3xl font-bold text-gray-900 mb-8">Analyze Instagram Videos</h2>
+        <div className="bg-white rounded-lg shadow-md p-8 mb-8 border border-gray-200">
+          <h2 className="text-2xl font-bold text-gray-900 mb-6">Analyze Instagram Videos</h2>
 
           {/* Mode Toggle */}
-          <div className="flex gap-4 mb-8">
+          <div className="flex gap-4 mb-6">
             <button
               onClick={() => setMode('single')}
-              className={`flex-1 py-4 px-6 rounded-xl font-semibold transition-all duration-200 ${
+              className={`flex-1 py-3 px-6 rounded-lg font-semibold transition-colors ${
                 mode === 'single' 
-                  ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg transform scale-105' 
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 hover:shadow-md'
+                  ? 'bg-blue-600 text-white' 
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
               }`}
               disabled={loading}
             >
@@ -155,10 +106,10 @@ function App() {
             </button>
             <button
               onClick={() => setMode('multi')}
-              className={`flex-1 py-4 px-6 rounded-xl font-semibold transition-all duration-200 ${
+              className={`flex-1 py-3 px-6 rounded-lg font-semibold transition-colors ${
                 mode === 'multi' 
-                  ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg transform scale-105' 
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 hover:shadow-md'
+                  ? 'bg-blue-600 text-white' 
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
               }`}
               disabled={loading}
             >
@@ -167,61 +118,36 @@ function App() {
           </div>
 
           {mode === 'single' ? (
-            <div className="space-y-4 mb-6">
-              <div className="grid md:grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Instagram Username
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="@username or username"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    className="w-full px-4 py-3 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    disabled={loading}
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Public accounts only</p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Number of Videos
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="10"
-                    value={videoLimit}
-                    onChange={(e) => setVideoLimit(parseInt(e.target.value))}
-                    className="w-full px-4 py-3 bg-white border border-gray-300 rounded-lg text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    disabled={loading}
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Analyzes top 3 videos by default</p>
-                </div>
+            <div className="grid md:grid-cols-2 gap-6 mb-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Instagram Username
+                </label>
+                <input
+                  type="text"
+                  placeholder="@username or username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="w-full px-4 py-3 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={loading}
+                />
+                <p className="text-xs text-gray-500 mt-1">Public accounts only</p>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Generated Video Duration (seconds)
+                  Number of Videos
                 </label>
                 <input
                   type="number"
-                  min="5"
-                  max="16"
-                  value={videoSeconds}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value)
-                    if (val >= 5 && val <= 16) {
-                      setVideoSeconds(val)
-                    }
-                  }}
-                  className="w-full px-4 py-3 bg-white border border-gray-300 rounded-lg text-gray-900 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                  min="1"
+                  max="10"
+                  value={videoLimit}
+                  onChange={(e) => setVideoLimit(parseInt(e.target.value))}
+                  className="w-full px-4 py-3 bg-white border border-gray-300 rounded-lg text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   disabled={loading}
                 />
-                <p className="text-xs text-gray-500 mt-1">
-                  How long each AI-generated video should be (5-16 seconds)
-                </p>
+                <p className="text-xs text-gray-500 mt-1">Analyzes top 3 videos by default</p>
               </div>
             </div>
           ) : (
@@ -294,29 +220,6 @@ function App() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Generated Video Duration (seconds)
-                </label>
-                <input
-                  type="number"
-                  min="5"
-                  max="16"
-                  value={videoSeconds}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value)
-                    if (val >= 5 && val <= 16) {
-                      setVideoSeconds(val)
-                    }
-                  }}
-                  className="w-full px-4 py-3 bg-white border border-gray-300 rounded-lg text-gray-900 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                  disabled={loading}
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  How long the combined fusion video should be (5-16 seconds)
-                </p>
-              </div>
-
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <p className="text-sm text-blue-700">
                   <strong>Multi-User Mode:</strong> Analyzes top videos from multiple creators and creates a combined Sora script that fuses their best elements together.
@@ -328,16 +231,16 @@ function App() {
           <button
             onClick={handleAnalyze}
             disabled={loading}
-            className="w-full bg-gradient-to-r from-purple-600 via-pink-600 to-blue-600 hover:from-purple-700 hover:via-pink-700 hover:to-blue-700 text-white font-bold py-5 px-8 rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-lg hover:shadow-xl transform hover:scale-[1.02]"
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-4 px-6 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
             {loading ? (
               <>
-                <Loader2 className="w-6 h-6 animate-spin" />
+                <Loader2 className="w-5 h-5 animate-spin" />
                 Analyzing Videos...
               </>
             ) : (
               <>
-                <Play className="w-6 h-6" />
+                <Play className="w-5 h-5" />
                 Generate Sora Scripts
               </>
             )}
@@ -352,15 +255,15 @@ function App() {
 
         {/* Results Section */}
         {results && results.type === 'single' && (
-          <div className="space-y-8">
+          <div className="space-y-6">
             {/* Scraped Videos */}
-            <div className="bg-white rounded-2xl shadow-xl p-8 border border-gray-200">
-              <h3 className="text-2xl font-bold text-gray-900 mb-6">
+            <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+              <h3 className="text-xl font-bold text-gray-900 mb-4">
                 📹 Found Videos from @{results.data.username}
               </h3>
               <div className="grid gap-4">
                 {results.data.scraped_videos.map((video, index) => (
-                  <div key={video.id} className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-xl p-5 border border-gray-200 hover:shadow-md transition-shadow">
+                  <div key={video.id} className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                     <div className="flex justify-between items-start mb-2">
                       <span className="text-sm font-medium text-blue-600">Video {index + 1}</span>
                       <a 
@@ -384,12 +287,10 @@ function App() {
 
             {/* Analyzed Results */}
             {results.data.analyzed_videos.map((result, index) => (
-              <div key={result.video_id} className="bg-white rounded-2xl shadow-xl p-10 border border-gray-200">
-                <div className="flex items-center gap-3 mb-8">
-                  <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center">
-                    <FileText className="w-6 h-6 text-white" />
-                  </div>
-                  <h3 className="text-3xl font-bold text-gray-900">Video {index + 1} Analysis</h3>
+              <div key={result.video_id} className="bg-white rounded-lg shadow-md p-8 border border-gray-200">
+                <div className="flex items-center gap-2 mb-6">
+                  <FileText className="w-6 h-6 text-blue-600" />
+                  <h3 className="text-2xl font-bold text-gray-900">Video {index + 1} Analysis</h3>
                 </div>
 
                 {/* Vision API Analysis (if available) */}
@@ -510,11 +411,6 @@ function App() {
                     </div>
                   )}
                 </div>
-
-                {/* Sora Generated Video */}
-                {result.sora_video_job && (
-                  <SoraVideoPlayer videoJob={result.sora_video_job} />
-                )}
               </div>
             ))}
           </div>
@@ -536,8 +432,8 @@ function App() {
 
             {/* Combined Structured Script */}
             {results.data.combined_structured_script ? (
-              <div className="bg-white rounded-2xl shadow-xl p-10 border border-gray-200">
-                <h4 className="text-2xl font-bold text-gray-900 mb-6">
+              <div className="bg-white rounded-lg shadow-md p-8 border border-gray-200">
+                <h4 className="text-lg font-semibold text-gray-900 mb-4">
                   ✨ Structured Combined Script
                 </h4>
                 <div className="space-y-4">
@@ -591,11 +487,11 @@ function App() {
                 </div>
               </div>
             ) : (
-              <div className="bg-white rounded-2xl shadow-xl p-10 border border-gray-200">
-                <h4 className="text-2xl font-bold text-gray-900 mb-6">
+              <div className="bg-white rounded-lg shadow-md p-8 border border-gray-200">
+                <h4 className="text-lg font-semibold text-gray-900 mb-4">
                   🎬 Combined Sora Script
                 </h4>
-                <div className="bg-gradient-to-r from-gray-50 to-gray-100 border border-gray-200 rounded-xl p-8">
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-6">
                   <p className="text-gray-800 text-sm leading-relaxed whitespace-pre-wrap">
                     {results.data.combined_sora_script}
                   </p>
@@ -603,21 +499,14 @@ function App() {
               </div>
             )}
 
-            {/* Combined Sora Video */}
-            {results.data.combined_sora_video_job && (
-              <div className="bg-white rounded-2xl shadow-xl p-10 border border-gray-200">
-                <SoraVideoPlayer videoJob={results.data.combined_sora_video_job} />
-              </div>
-            )}
-
             {/* Individual Videos Summary */}
-            <div className="bg-white rounded-2xl shadow-xl p-8 border border-gray-200">
-              <h4 className="text-2xl font-bold text-gray-900 mb-6">
+            <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+              <h4 className="text-lg font-semibold text-gray-900 mb-4">
                 📊 Individual Videos Analyzed
               </h4>
               <div className="grid gap-4">
                 {results.data.individual_results.map((result, index) => (
-                  <div key={result.video_id} className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-xl p-5 border border-gray-200 hover:shadow-md transition-shadow">
+                  <div key={result.video_id} className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                     <div className="flex justify-between items-start mb-2">
                       <span className="text-sm font-medium text-blue-600">Video {index + 1}</span>
                       <a 
@@ -640,8 +529,7 @@ function App() {
             </div>
           </div>
         )}
-        </main>
-      </div>
+      </main>
     </div>
   )
 }

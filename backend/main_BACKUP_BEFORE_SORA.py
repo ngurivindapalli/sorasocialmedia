@@ -3,28 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import os
-import asyncio
 from dotenv import load_dotenv
 
 from services.instagram_api import InstagramAPIService
 from services.openai_service import OpenAIService
 from models.schemas import VideoAnalysisRequest, VideoAnalysisResponse, ScrapedVideo, VideoResult
 
-# Load .env file (handle BOM encoding issues)
-env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-OPENAI_API_KEY = None
+load_dotenv()
 
-# Read .env file directly with UTF-8-sig to handle BOM
-try:
-    with open(env_path, 'r', encoding='utf-8-sig') as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith('OPENAI_API_KEY='):
-                OPENAI_API_KEY = line.split('=', 1)[1].strip()
-                break
-except Exception as e:
-    print(f"[ERROR] Failed to read .env file: {e}")
-
+# Get API key from environment
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY environment variable is required. Please set it in backend/.env file")
 
@@ -84,10 +72,8 @@ async def analyze_videos(request: VideoAnalysisRequest):
         # Convert to ScrapedVideo objects for response
         scraped_videos = [ScrapedVideo(**v) for v in videos]
         
-        # Step 2: Process each video with Build Hours features (analysis phase)
-        print(f"[API] 🔄 Phase 1: Analyzing videos (transcription + script generation)...")
+        # Step 2: Process each video with Build Hours features
         analyzed_results = []
-        video_data_for_sora = []  # Store data for parallel Sora generation
         
         for video in videos:
             try:
@@ -120,11 +106,10 @@ async def analyze_videos(request: VideoAnalysisRequest):
                         'views': video['views'],
                         'likes': video['likes'],
                         'text': video['text']
-                    },
-                    target_duration=request.video_seconds or 8
+                    }
                 )
                 
-                # Try to generate structured Sora script (OpenAI Build Hours)
+                # BUILD HOURS FEATURE: Structured Outputs - Generate validated structured script
                 structured_sora = None
                 try:
                     print(f"[API] 📐 Generating structured Sora script (Build Hours: Structured Outputs)...")
@@ -136,8 +121,7 @@ async def analyze_videos(request: VideoAnalysisRequest):
                             'text': video['text'],
                             'duration': video.get('duration', 0)
                         },
-                        thumbnail_analysis=thumbnail_analysis,  # Include Vision API data
-                        target_duration=request.video_seconds or 8  # Pass user's desired duration
+                        thumbnail_analysis=thumbnail_analysis  # Include Vision API data
                     )
                     print(f"[API] ✓ Structured output generated successfully")
                 except Exception as struct_error:
@@ -145,98 +129,29 @@ async def analyze_videos(request: VideoAnalysisRequest):
                     import traceback
                     traceback.print_exc()
                 
-                # Store video data for parallel Sora generation
-                video_data_for_sora.append({
-                    'video': video,
-                    'transcription': transcription,
-                    'sora_script': sora_script,
-                    'structured_sora': structured_sora,
-                    'thumbnail_analysis': thumbnail_analysis,
-                    'video_path': video_path
-                })
+                analyzed_results.append(VideoResult(
+                    video_id=video['id'],
+                    post_url=video['post_url'],
+                    views=video['views'],
+                    likes=video['likes'],
+                    original_text=video['text'],
+                    transcription=transcription,
+                    sora_script=sora_script,
+                    structured_sora_script=structured_sora,  # Build Hours: Structured Outputs
+                    thumbnail_analysis=thumbnail_analysis  # Build Hours: Vision API
+                ))
                 
-                print(f"[API] ✓ Video analyzed: {video['id']}")
+                print(f"[API] Successfully processed video: {video['id']}")
                 
+                # Cleanup
+                if os.path.exists(video_path):
+                    os.remove(video_path)
+                    
             except Exception as video_error:
-                print(f"[API] Failed to process video {video['id']}: {video_error}")
+                print(f"[API] Error processing video {video['id']}: {video_error}")
                 import traceback
                 traceback.print_exc()
-        
-        # Step 3: Generate Sora videos in PARALLEL for speed
-        print(f"[API] 🚀 Phase 2: Generating {len(video_data_for_sora)} Sora videos in parallel...")
-        
-        async def generate_single_sora(video_data):
-            """Helper function to generate a single Sora video"""
-            try:
-                video = video_data['video']
-                structured_sora = video_data['structured_sora']
-                sora_script = video_data['sora_script']
-                
-                # Use structured prompt if available, otherwise use regular script
-                video_prompt = structured_sora.full_prompt if structured_sora else sora_script
-                
-                # Clamp video_seconds to valid range (5-16) and closest valid Sora value
-                user_seconds = request.video_seconds or 8
-                user_seconds = max(5, min(16, user_seconds))  # Clamp to 5-16
-                # Round to nearest valid Sora value (4, 8, 12)
-                if user_seconds <= 6:
-                    sora_seconds = 4
-                elif user_seconds <= 10:
-                    sora_seconds = 8
-                else:
-                    sora_seconds = 12
-                
-                print(f"[API] 🎬 Generating Sora video for {video['id']}...")
-                sora_job_info = await openai_service.generate_sora_video(
-                    prompt=video_prompt,
-                    model="sora-2",  # Fast model for quick results
-                    size="1280x720",
-                    seconds=sora_seconds
-                )
-                
-                from models.schemas import SoraVideoJob
-                return SoraVideoJob(
-                    job_id=sora_job_info["job_id"],
-                    status=sora_job_info["status"],
-                    progress=sora_job_info.get("progress"),
-                    model=sora_job_info["model"],
-                    created_at=sora_job_info["created_at"]
-                )
-            except Exception as e:
-                print(f"[API] Sora generation failed for {video['id']}: {e}")
-                return None
-        
-        # Generate all Sora videos concurrently if we have <= 3 videos
-        sora_jobs = []
-        if request.video_limit and request.video_limit <= 3 and video_data_for_sora:
-            sora_jobs = await asyncio.gather(*[
-                generate_single_sora(vd) for vd in video_data_for_sora
-            ])
-        else:
-            sora_jobs = [None] * len(video_data_for_sora)
-        
-        # Step 4: Combine results
-        for i, video_data in enumerate(video_data_for_sora):
-            video = video_data['video']
-            analyzed_results.append(VideoResult(
-                video_id=video['id'],
-                post_url=video['post_url'],
-                views=video['views'],
-                likes=video['likes'],
-                original_text=video['text'],
-                transcription=video_data['transcription'],
-                sora_script=video_data['sora_script'],
-                structured_sora_script=video_data['structured_sora'],
-                thumbnail_analysis=video_data['thumbnail_analysis'],
-                sora_video_job=sora_jobs[i]  # May be None if generation failed or skipped
-            ))
-            
-            # Cleanup
-            video_path = video_data['video_path']
-            if os.path.exists(video_path):
-                os.remove(video_path)
-        
-        print(f"[API] ✅ All videos processed successfully!")
+                continue
         
         return VideoAnalysisResponse(
             username=request.username,
@@ -362,12 +277,11 @@ async def analyze_multi_users(request: dict):
         
         # Step 3: Generate combined script
         print(f"[API] Creating combined script from {len(all_results)} videos...")
-        # Create combined Sora script
+        
         combined_script = await openai_service.create_combined_script(
             results=all_results,
             usernames=multi_request.usernames,
-            combine_style=multi_request.combine_style,
-            target_duration=multi_request.video_seconds or 12  # Pass user's desired duration
+            combine_style=multi_request.combine_style
         )
         
         # Try to generate structured combined script
@@ -376,48 +290,10 @@ async def analyze_multi_users(request: dict):
             combined_structured = await openai_service.create_combined_structured_script(
                 results=all_results,
                 usernames=multi_request.usernames,
-                combine_style=multi_request.combine_style,
-                target_duration=multi_request.video_seconds or 12  # Pass user's desired duration
+                combine_style=multi_request.combine_style
             )
         except Exception as e:
             print(f"[API] Combined structured output skipped: {e}")
-        
-        # Generate Sora video for the combined script
-        combined_sora_video_job = None
-        try:
-            print(f"[API] 🎬 Generating Sora video for combined script...")
-            combined_prompt = combined_structured.full_prompt if combined_structured else combined_script
-            
-            # Clamp video_seconds to valid range (5-16) and closest valid Sora value
-            user_seconds = multi_request.video_seconds or 12
-            user_seconds = max(5, min(16, user_seconds))  # Clamp to 5-16
-            # Round to nearest valid Sora value (4, 8, 12)
-            if user_seconds <= 6:
-                sora_seconds = 4
-            elif user_seconds <= 10:
-                sora_seconds = 8
-            else:
-                sora_seconds = 12
-            
-            sora_job_info = await openai_service.generate_sora_video(
-                prompt=combined_prompt,
-                model="sora-2-pro",  # Use pro model for combined/fusion videos
-                size="1280x720",
-                seconds=sora_seconds
-            )
-            
-            from models.schemas import SoraVideoJob
-            combined_sora_video_job = SoraVideoJob(
-                job_id=sora_job_info["job_id"],
-                status=sora_job_info["status"],
-                progress=sora_job_info.get("progress"),
-                model=sora_job_info["model"],
-                created_at=sora_job_info["created_at"]
-            )
-            print(f"[API] ✓ Combined Sora video job created: {combined_sora_video_job.job_id}")
-            
-        except Exception as sora_error:
-            print(f"[API] Combined Sora video generation failed (non-critical): {sora_error}")
         
         return CombinedVideoResult(
             usernames=multi_request.usernames,
@@ -425,8 +301,7 @@ async def analyze_multi_users(request: dict):
             individual_results=all_results,
             combined_sora_script=combined_script,
             combined_structured_script=combined_structured,
-            fusion_notes=f"Combined {len(all_results)} top-performing videos using {multi_request.combine_style} style",
-            combined_sora_video_job=combined_sora_video_job
+            fusion_notes=f"Combined {len(all_results)} top-performing videos using {multi_request.combine_style} style"
         )
         
     except Exception as e:
@@ -436,97 +311,13 @@ async def analyze_multi_users(request: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/sora/generate")
-async def generate_sora_video(request: dict):
-    """
-    Generate a video using Sora API from a text prompt.
-    Returns job ID for status polling.
-    """
-    try:
-        prompt = request.get("prompt")
-        model = request.get("model", "sora-2")  # sora-2 or sora-2-pro
-        size = request.get("size", "1280x720")
-        seconds = request.get("seconds", 8)
-        
-        # Validate seconds (Sora API only accepts 4, 8, or 12)
-        if seconds not in [4, 8, 12]:
-            seconds = 8  # Default to 8 if invalid
-        
-        if not prompt:
-            raise HTTPException(status_code=400, detail="Prompt is required")
-        
-        print(f"[API] Creating Sora video job...")
-        job_info = await openai_service.generate_sora_video(
-            prompt=prompt,
-            model=model,
-            size=size,
-            seconds=seconds
-        )
-        
-        return job_info
-        
-    except Exception as e:
-        print(f"[API] Sora generation error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/sora/status/{job_id}")
-async def get_sora_status(job_id: str):
-    """
-    Check the status of a Sora video generation job.
-    """
-    try:
-        status = await openai_service.get_sora_video_status(job_id)
-        return status
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/sora/download/{job_id}")
-async def download_sora_video(job_id: str):
-    """
-    Download a completed Sora video as MP4.
-    """
-    from fastapi.responses import StreamingResponse
-    import io
-    
-    try:
-        # First check if the video is completed
-        status = await openai_service.get_sora_video_status(job_id)
-        
-        if status["status"] != "completed":
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Video not ready. Current status: {status['status']}"
-            )
-        
-        # Download the video
-        video_bytes = await openai_service.download_sora_video(job_id)
-        
-        # Return as streaming response
-        return StreamingResponse(
-            io.BytesIO(video_bytes),
-            media_type="video/mp4",
-            headers={
-                "Content-Disposition": f"attachment; filename=sora_{job_id}.mp4"
-            }
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[API] Download error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.get("/api/health")
 async def health_check():
     return {
         "status": "healthy",
         "x_api": "configured" if os.getenv("X_BEARER_TOKEN") else "missing",
         "openai_api": "configured" if OPENAI_API_KEY else "missing",
-        "fine_tuned_model": os.getenv("OPENAI_FINE_TUNED_MODEL") or "not configured",
-        "sora_video_generation": "✓ Available"
+        "fine_tuned_model": os.getenv("OPENAI_FINE_TUNED_MODEL") or "not configured"
     }
 
 

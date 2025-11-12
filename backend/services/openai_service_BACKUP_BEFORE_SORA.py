@@ -46,19 +46,14 @@ class OpenAIService:
             print(f"[OpenAI] Transcription error: {str(e)}")
             raise Exception(f"Transcription error: {str(e)}")
     
-    async def generate_sora_script(self, transcription: str, video_metadata: Dict, target_duration: int = 8) -> str:
-        """
-        Generate basic Sora script (legacy method for backward compatibility)
-        
-        Args:
-            target_duration: Target video duration in seconds (5-16)
-        """
+    async def generate_sora_script(self, transcription: str, video_metadata: Dict) -> str:
+        """Generate basic Sora script (legacy method for backward compatibility)"""
         try:
             # Check if transcription is valid
             has_valid_transcription = not transcription.startswith("[") and len(transcription) > 20
             
             if has_valid_transcription:
-                prompt = f"""Based on this video transcription and metrics, create a detailed Sora AI video generation prompt for a {target_duration}-second video.
+                prompt = f"""Based on this video transcription and metrics, create a detailed Sora AI video generation prompt.
 
 TRANSCRIPTION:
 {transcription}
@@ -68,12 +63,10 @@ VIDEO METRICS:
 - Likes: {video_metadata.get('likes', 0):,}
 - Original Caption: {video_metadata.get('text', 'N/A')}
 
-TARGET DURATION: {target_duration} seconds
-
-Create a Sora prompt that captures the core concept, visual style, camera work, timing, and engagement factors. Start the prompt with "Create a {target_duration}-second video..."."""
+Create a Sora prompt that captures the core concept, visual style, camera work, timing, and engagement factors."""
             else:
                 # No valid transcription - use caption and metrics only
-                prompt = f"""Based on this Instagram video's caption and engagement metrics, create a detailed Sora AI video generation prompt for a {target_duration}-second video.
+                prompt = f"""Based on this Instagram video's caption and engagement metrics, create a detailed Sora AI video generation prompt.
 
 VIDEO CAPTION:
 {video_metadata.get('text', 'No caption available')}
@@ -82,11 +75,9 @@ VIDEO METRICS:
 - Views: {video_metadata.get('views', 0):,}
 - Likes: {video_metadata.get('likes', 0):,}
 
-TARGET DURATION: {target_duration} seconds
-
 NOTE: Audio transcription was not available for this video (may be music-only or no audio).
 
-Create a Sora prompt that captures likely visual style, camera work, timing, and engagement factors based on the caption and popularity metrics. Start the prompt with "Create a {target_duration}-second video..."."""
+Create a Sora prompt that captures likely visual style, camera work, timing, and engagement factors based on the caption and popularity metrics."""
 
             completion = await self.client.chat.completions.create(
                 model=self.model,
@@ -103,13 +94,10 @@ Create a Sora prompt that captures likely visual style, camera work, timing, and
             raise Exception(f"Sora script generation error: {str(e)}")
     
     
-    async def generate_structured_sora_script(self, transcription: str, video_metadata: Dict, thumbnail_analysis: Optional[ThumbnailAnalysis] = None, target_duration: int = 8) -> StructuredSoraScript:
+    async def generate_structured_sora_script(self, transcription: str, video_metadata: Dict, thumbnail_analysis: Optional[ThumbnailAnalysis] = None) -> StructuredSoraScript:
         """
         Generate structured Sora script using OpenAI Structured Outputs (Build Hours Feature)
         Guarantees valid, consistent JSON structure matching StructuredSoraScript schema
-        
-        Args:
-            target_duration: Target video duration in seconds (5-16)
         """
         try:
             # Build context including thumbnail analysis if available
@@ -120,9 +108,7 @@ VIDEO METRICS:
 - Views: {video_metadata.get('views', 0):,}
 - Likes: {video_metadata.get('likes', 0):,}
 - Original Text: {video_metadata.get('text', 'N/A')}
-- Duration: {video_metadata.get('duration', 'Unknown')} seconds
-
-TARGET OUTPUT DURATION: {target_duration} seconds"""
+- Duration: {video_metadata.get('duration', 'Unknown')} seconds"""
 
             if thumbnail_analysis:
                 context += f"""
@@ -137,16 +123,13 @@ VISUAL ANALYSIS (from thumbnail):
 
 {context}
 
-IMPORTANT: The generated video MUST be exactly {target_duration} seconds long. Structure your timing and pacing to fit this duration precisely.
-
 Analyze what made this video successful and create a detailed, structured Sora prompt that captures:
 1. Core concept and message
 2. Visual style (colors, lighting, mood, references)
 3. Camera work (shot types, movements, angles)
-4. Timing and pacing structure (MUST fit {target_duration} seconds)
+4. Timing and pacing structure
 5. Engagement optimization based on metrics
 
-In the full_prompt field, explicitly state "Create a {target_duration}-second video..." at the beginning.
 Make it actionable and ready for Sora AI."""
 
             # USE STRUCTURED OUTPUTS - Fixed API path
@@ -246,12 +229,9 @@ Make it actionable and ready for Sora AI."""
             raise Exception(f"Thumbnail analysis error: {str(e)}")
     
     
-    async def create_combined_script(self, results: list, usernames: list, combine_style: str = "fusion", target_duration: int = 12) -> str:
+    async def create_combined_script(self, results: list, usernames: list, combine_style: str = "fusion") -> str:
         """
         Create a combined Sora script that fuses the best elements from multiple creators.
-        
-        Args:
-            target_duration: Target video duration in seconds (5-16)
         """
         try:
             # Build summary of all analyzed videos
@@ -269,7 +249,7 @@ Video {i+1}:
             combined_summary = "\n".join(video_summaries)
             
             if combine_style == "fusion":
-                instruction = f"""Analyze all these successful videos and create ONE UNIFIED Sora prompt for a {target_duration}-second video that FUSES the best elements from each creator's style.
+                instruction = """Analyze all these successful videos and create ONE UNIFIED Sora prompt that FUSES the best elements from each creator's style.
 
 Blend:
 - Visual aesthetics and color palettes
@@ -278,9 +258,9 @@ Blend:
 - Engagement hooks
 - Storytelling approaches
 
-Create a single, cohesive Sora prompt that combines the strengths of all these viral videos into one powerful {target_duration}-second concept. Start with "Create a {target_duration}-second video..."."""
+Create a single, cohesive Sora prompt that combines the strengths of all these viral videos into one powerful concept."""
             else:  # sequence
-                instruction = f"""Analyze all these successful videos and create ONE SEQUENTIAL Sora prompt for a {target_duration}-second video that tells a story using elements from each creator.
+                instruction = """Analyze all these successful videos and create ONE SEQUENTIAL Sora prompt that tells a story using elements from each creator.
 
 Structure it as a narrative journey that:
 - Opens with the style of the first creator
@@ -288,7 +268,7 @@ Structure it as a narrative journey that:
 - Builds to a climax using the most engaging techniques
 - Creates a cohesive multi-part story
 
-Create a single Sora prompt for a {target_duration}-second video that flows through these different styles. Start with "Create a {target_duration}-second video..."."""
+Create a single Sora prompt for a video that flows through these different styles."""
             
             prompt = f"""{instruction}
 
@@ -320,17 +300,13 @@ Create a comprehensive Sora AI prompt that captures the combined power of these 
             raise Exception(f"Combined script generation error: {str(e)}")
     
     
-    async def create_combined_structured_script(self, results: list, usernames: list, combine_style: str = "fusion", target_duration: int = 12) -> StructuredSoraScript:
+    async def create_combined_structured_script(self, results: list, usernames: list, combine_style: str = "fusion") -> StructuredSoraScript:
         """
         Create a combined STRUCTURED Sora script using Structured Outputs.
-        
-        Args:
-            target_duration: Target video duration in seconds (5-16)
         """
         try:
             # Build comprehensive analysis
-            analysis_text = f"COMBINING {len(results)} VIDEOS FROM: {', '.join(['@' + u for u in usernames])}\n"
-            analysis_text += f"TARGET OUTPUT DURATION: {target_duration} seconds\n\n"
+            analysis_text = f"COMBINING {len(results)} VIDEOS FROM: {', '.join(['@' + u for u in usernames])}\n\n"
             
             for i, result in enumerate(results):
                 analysis_text += f"""
@@ -343,19 +319,15 @@ Key Content: {result.transcription[:300]}
                     analysis_text += f"Colors: {', '.join(result.thumbnail_analysis.dominant_colors)}\n"
             
             if combine_style == "fusion":
-                instruction = f"Create a FUSION Sora prompt that blends all these styles into one cohesive, powerful {target_duration}-second video concept."
+                instruction = "Create a FUSION Sora prompt that blends all these styles into one cohesive, powerful video concept."
             else:
-                instruction = f"Create a SEQUENTIAL Sora prompt that tells a story flowing through these different creator styles in exactly {target_duration} seconds."
+                instruction = "Create a SEQUENTIAL Sora prompt that tells a story flowing through these different creator styles."
             
             prompt = f"""{instruction}
 
 {analysis_text}
 
-IMPORTANT: The final video MUST be exactly {target_duration} seconds. Structure the timing and pacing accordingly.
-
-Synthesize the best visual elements, pacing, camera work, and engagement hooks from all these successful videos into ONE structured Sora prompt.
-
-In the full_prompt field, start with "Create a {target_duration}-second video..."."""
+Synthesize the best visual elements, pacing, camera work, and engagement hooks from all these successful videos into ONE structured Sora prompt."""
             
             completion = await self.client.chat.completions.create(
                 model=self.model,
@@ -386,96 +358,3 @@ In the full_prompt field, start with "Create a {target_duration}-second video...
             
         except Exception as e:
             raise Exception(f"Combined structured script error: {str(e)}")
-    
-    
-    async def generate_sora_video(self, prompt: str, model: str = "sora-2", size: str = "1280x720", seconds: int = 8) -> dict:
-        """
-        Generate a video using Sora API (OpenAI Video Generation)
-        Returns job info with status and ID for polling
-        
-        API Docs: https://platform.openai.com/docs/guides/video-generation
-        """
-        try:
-            print(f"[Sora] Starting video generation with {model}")
-            print(f"[Sora] Prompt: {prompt[:100]}...")
-            print(f"[Sora] Size: {size}, Duration: {seconds}s")
-            
-            # Create video generation job
-            # Note: 'seconds' must be a string according to the API docs
-            video_job = await self.client.videos.create(
-                model=model,
-                prompt=prompt,
-                size=size,
-                seconds=str(seconds)
-            )
-            
-            print(f"[Sora] Job created: {video_job.id}")
-            print(f"[Sora] Status: {video_job.status}")
-            print(f"[Sora] Progress: {getattr(video_job, 'progress', 0)}%")
-            
-            return {
-                "job_id": video_job.id,
-                "status": video_job.status,
-                "progress": getattr(video_job, 'progress', 0),
-                "model": video_job.model,
-                "created_at": video_job.created_at,
-                "size": size,
-                "seconds": seconds
-            }
-            
-        except Exception as e:
-            print(f"[Sora] Video generation error: {str(e)}")
-            raise Exception(f"Sora video generation error: {str(e)}")
-    
-    
-    async def get_sora_video_status(self, job_id: str) -> dict:
-        """
-        Poll the status of a Sora video generation job
-        Possible statuses: queued, in_progress, completed, failed
-        """
-        try:
-            video_job = await self.client.videos.retrieve(job_id)
-            
-            print(f"[Sora] Status check for {job_id}: {video_job.status} ({getattr(video_job, 'progress', 0)}%)")
-            
-            result = {
-                "job_id": video_job.id,
-                "status": video_job.status,
-                "progress": getattr(video_job, 'progress', 0),
-                "model": video_job.model,
-                "created_at": video_job.created_at
-            }
-            
-            # If completed, add download URL
-            if video_job.status == "completed":
-                result["video_url"] = f"/api/sora/download/{job_id}"
-                print(f"[Sora] Video ready for download: {job_id}")
-            
-            return result
-            
-        except Exception as e:
-            print(f"[Sora] Status check error: {str(e)}")
-            raise Exception(f"Failed to get video status: {str(e)}")
-    
-    
-    async def download_sora_video(self, job_id: str) -> bytes:
-        """
-        Download the completed Sora video as bytes
-        Uses the download_content method from the OpenAI SDK
-        Returns: HttpxBinaryResponseContent which has .content property
-        """
-        try:
-            print(f"[Sora] Downloading video: {job_id}")
-            
-            # Download video content from Sora API (returns HttpxBinaryResponseContent)
-            response = await self.client.videos.download_content(job_id)
-            
-            # Use .content property to get bytes (synchronous, already loaded)
-            video_bytes = response.content
-            
-            print(f"[Sora] Downloaded {len(video_bytes):,} bytes")
-            return video_bytes
-            
-        except Exception as e:
-            print(f"[Sora] Download error: {str(e)}")
-            raise Exception(f"Failed to download video: {str(e)}")

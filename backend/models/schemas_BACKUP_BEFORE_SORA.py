@@ -5,7 +5,6 @@ from typing import List, Optional
 class VideoAnalysisRequest(BaseModel):
     username: str = Field(..., description="Instagram username to analyze")
     video_limit: Optional[int] = Field(3, description="Number of videos to analyze (default: 3, max: 10)")
-    video_seconds: Optional[int] = Field(8, description="Duration of generated videos in seconds (5-16, default: 8)")
 
 
 class MultiUserAnalysisRequest(BaseModel):
@@ -13,7 +12,6 @@ class MultiUserAnalysisRequest(BaseModel):
     usernames: List[str] = Field(..., description="List of Instagram usernames (2-5 users)", min_length=2, max_length=5)
     videos_per_user: Optional[int] = Field(2, description="Number of top videos per user (default: 2)")
     combine_style: Optional[str] = Field("fusion", description="How to combine: 'fusion' (blend both styles) or 'sequence' (sequential story)")
-    video_seconds: Optional[int] = Field(12, description="Duration of combined video in seconds (5-16, default: 12)")
 
 
 class ScrapedVideo(BaseModel):
@@ -74,16 +72,6 @@ class ThumbnailAnalysis(BaseModel):
     style_assessment: str = Field(description="Overall visual style assessment")
 
 
-class SoraVideoJob(BaseModel):
-    """Sora video generation job status"""
-    job_id: str
-    status: str  # queued, in_progress, completed, failed
-    progress: Optional[int] = None
-    model: str
-    video_url: Optional[str] = None  # URL to download completed video
-    created_at: int
-    
-    
 class VideoResult(BaseModel):
     """Analyzed video with transcription and Sora script"""
     video_id: str
@@ -95,7 +83,6 @@ class VideoResult(BaseModel):
     sora_script: str
     structured_sora_script: Optional[StructuredSoraScript] = None  # Structured Outputs format
     thumbnail_analysis: Optional[ThumbnailAnalysis] = None  # Vision API analysis
-    sora_video_job: Optional[SoraVideoJob] = None  # Sora video generation job
 
 
 class VideoAnalysisResponse(BaseModel):
@@ -113,4 +100,3 @@ class CombinedVideoResult(BaseModel):
     combined_sora_script: str
     combined_structured_script: Optional[StructuredSoraScript] = None
     fusion_notes: str = Field(description="Explanation of how the styles were combined")
-    combined_sora_video_job: Optional[SoraVideoJob] = None  # Sora video for combined script
