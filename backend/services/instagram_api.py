@@ -37,7 +37,70 @@ class InstagramAPIService:
             'Cache-Control': 'max-age=0'
         })
         
+        # Try to login with Instagram credentials if provided (helps avoid blocking)
+        ig_username = os.getenv('INSTAGRAM_USERNAME')
+        ig_password = os.getenv('INSTAGRAM_PASSWORD')
+        
+        if ig_username and ig_password:
+            try:
+                print(f"[IG] Attempting login as @{ig_username}...")
+                self.loader.login(ig_username, ig_password)
+                print(f"[IG] ✓ Successfully logged in as @{ig_username}")
+                self.logged_in = True
+            except Exception as login_error:
+                print(f"[IG] ⚠️ Login failed: {login_error}. Continuing without authentication.")
+                self.logged_in = False
+        else:
+            print("[IG] No Instagram credentials provided. Running without authentication (may be rate-limited).")
+            print("[IG] Tip: Set INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD environment variables to avoid blocking.")
+            self.logged_in = False
+        
         print("[IG] Initialized with browser-like headers to avoid blocking")
+    
+    async def get_profile_context(self, username: str) -> Dict:
+        """Extract profile context including bio, business info, and category"""
+        try:
+            print(f"[IG] Extracting profile context for: {username}")
+            
+            import time
+            import random
+            time.sleep(random.uniform(1.5, 3.0))
+            
+            profile = instaloader.Profile.from_username(self.loader.context, username)
+            
+            # Extract profile information
+            context = {
+                "username": profile.username,
+                "full_name": profile.full_name or "",
+                "biography": profile.biography or "",
+                "external_url": profile.external_url or "",
+                "is_business_account": profile.is_business_account,
+                "business_category": profile.business_category_name or "",
+                "followers": profile.followers,
+                "following": profile.followees,
+                "posts_count": profile.mediacount,
+                "is_verified": profile.is_verified,
+                "profile_pic_url": profile.profile_pic_url or ""
+            }
+            
+            print(f"[IG] Profile context extracted: {context['full_name']}, Business: {context['is_business_account']}, Category: {context['business_category']}")
+            return context
+            
+        except Exception as e:
+            print(f"[IG] Error extracting profile context: {str(e)}")
+            return {
+                "username": username,
+                "full_name": "",
+                "biography": "",
+                "external_url": "",
+                "is_business_account": False,
+                "business_category": "",
+                "followers": 0,
+                "following": 0,
+                "posts_count": 0,
+                "is_verified": False,
+                "profile_pic_url": ""
+            }
     
     async def get_user_videos(self, username: str, limit: int = 1) -> List[Dict]:
         """Fetch videos from Instagram profile with anti-blocking measures"""
@@ -155,8 +218,11 @@ class InstagramAPIService:
             raise Exception(f"Profile '@{username}' is private. Cannot access without login.")
         except instaloader.exceptions.ConnectionException as e:
             error_msg = str(e)
-            if "401" in error_msg:
-                raise Exception(f"Instagram blocked the request (401 Unauthorized). This happens when Instagram detects automation. Solutions:\n\n1. Try again in a few minutes (rate limiting)\n2. Use a different network/IP\n3. Login to Instagram (requires session cookies)\n\nFor now, try a different username or wait 5-10 minutes before trying again.")
+            if "401" in error_msg or "429" in error_msg:
+                if self.logged_in:
+                    raise Exception(f"Instagram rate limit reached even with authentication. Please wait 10-15 minutes and try again.")
+                else:
+                    raise Exception(f"⚠️ Instagram blocked the request - this is common for cloud servers.\n\n🔧 Solutions:\n1. Add Instagram login credentials to Render:\n   - INSTAGRAM_USERNAME=your_username\n   - INSTAGRAM_PASSWORD=your_password\n2. Try a different Instagram account\n3. Wait 10-15 minutes (rate limiting)\n\nAuthenticated requests are much less likely to be blocked!")
             raise Exception(f"Instagram connection error: {str(e)}")
         except Exception as e:
             print(f"[IG] Unexpected error: {str(e)}")

@@ -4,16 +4,159 @@ import os
 import base64
 from models.schemas import StructuredSoraScript, ThumbnailAnalysis
 
+try:
+    from anthropic import AsyncAnthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+    print("[Warning] Anthropic SDK not installed. Claude features will be disabled.")
+
 
 class OpenAIService:
-    """Service for OpenAI API interactions - Whisper + GPT-4 Vision + Structured Outputs (Build Hours Features)"""
+    """Service for OpenAI and Claude API interactions - Whisper + GPT-4 Vision + Claude + Structured Outputs"""
     
-    def __init__(self, api_key: str, fine_tuned_model: Optional[str] = None):
+    def __init__(self, api_key: str, anthropic_key: Optional[str] = None, fine_tuned_model: Optional[str] = None):
         self.client = AsyncOpenAI(api_key=api_key)
         # Use fine-tuned model if provided, otherwise use gpt-4o-2024-08-06 (supports Structured Outputs)
         self.model = fine_tuned_model or "gpt-4o-2024-08-06"
         print(f"[OpenAI] Using model: {self.model}")
         print(f"[OpenAI] Build Hours: Structured Outputs enabled ✓")
+        
+        # Initialize Claude client if available
+        if ANTHROPIC_AVAILABLE and anthropic_key:
+            self.claude_client = AsyncAnthropic(api_key=anthropic_key)
+            self.claude_available = True
+            print(f"[Claude] Claude API initialized ✓")
+        else:
+            self.claude_client = None
+            self.claude_available = False
+            if not ANTHROPIC_AVAILABLE:
+                print(f"[Claude] Anthropic SDK not available")
+            elif not anthropic_key:
+                print(f"[Claude] Anthropic API key not provided")
+    
+    async def research_topic_context(self, trend_data: Dict) -> str:
+        """
+        Use GPT-4 to research and understand the context of a LinkedIn trending topic.
+        Analyzes the topic, industry, and related information to create comprehensive context.
+        """
+        try:
+            topic = trend_data.get('topic', '')
+            description = trend_data.get('description', '')
+            industry = trend_data.get('industry', '')
+            hashtags = trend_data.get('hashtags', [])
+            sentiment = trend_data.get('sentiment', '')
+            
+            if not topic and not description:
+                return "No topic information available for context analysis."
+            
+            prompt = f"""Analyze this LinkedIn trending topic and provide comprehensive context:
+
+TOPIC INFORMATION:
+- Topic: {topic}
+- Description: {description}
+- Industry: {industry}
+- Hashtags: {', '.join(hashtags)}
+- Sentiment: {sentiment}
+- Engagement: {trend_data.get('engagement', 'N/A')}
+
+Based on this information, provide:
+1. Why this topic is trending and relevant now
+2. Key insights and implications for professionals
+3. Target audience and their interests
+4. Industry context and positioning
+5. Key messaging themes that resonate
+6. Visual and tone recommendations for professional content
+
+Be specific and detailed. Format as a clear, structured summary that can be used to inform professional video content creation for LinkedIn."""
+
+            completion = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are a business strategist and content expert specializing in LinkedIn trends and professional content. Analyze trending topics to understand their context and implications."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=500
+            )
+            
+            context_summary = completion.choices[0].message.content
+            print(f"[OpenAI] Topic context researched: {len(context_summary)} characters")
+            return context_summary
+            
+        except Exception as e:
+            print(f"[OpenAI] Error researching topic context: {str(e)}")
+            return f"Topic context: {trend_data.get('topic', '')} - {trend_data.get('description', 'No description available')}"
+    
+    async def research_profile_context(self, profile_context: Dict) -> str:
+        """
+        Use GPT-4 to research and understand the profile/page context from profile information.
+        Works for all account types: business accounts, personal brands, creators, influencers, etc.
+        Analyzes bio, account type, and other profile data to create comprehensive context.
+        """
+        try:
+            bio = profile_context.get('biography', '')
+            full_name = profile_context.get('full_name', '')
+            business_category = profile_context.get('business_category', '')
+            external_url = profile_context.get('external_url', '')
+            is_business = profile_context.get('is_business_account', False)
+            followers = profile_context.get('followers', 0)
+            is_verified = profile_context.get('is_verified', False)
+            posts_count = profile_context.get('posts_count', 0)
+            
+            if not bio and not full_name:
+                return "No profile information available for context analysis."
+            
+            account_type = "Business Account" if is_business else "Personal/Creator Account"
+            
+            prompt = f"""Analyze this Instagram profile and provide comprehensive context about the page/account:
+
+PROFILE INFORMATION:
+- Full Name: {full_name}
+- Username: {profile_context.get('username', '')}
+- Bio: {bio}
+- Account Type: {account_type}
+- Business Category: {business_category if business_category else 'N/A (Personal/Creator account)'}
+- External URL: {external_url if external_url else 'None'}
+- Followers: {followers:,}
+- Posts: {posts_count:,}
+- Verified: {is_verified}
+
+Based on this information, analyze and provide:
+1. What type of account this is (business, personal brand, creator, influencer, artist, etc.)
+2. Their main focus/content themes (products, services, lifestyle, niche, expertise, etc.)
+3. Their target audience and community
+4. Their content voice, style, and aesthetic
+5. Key messaging themes and values
+6. Content positioning and what makes them unique
+
+IMPORTANT: This works for ALL account types:
+- Business accounts: analyze products/services, brand identity, target market
+- Personal brands/creators: analyze their niche, content style, audience, expertise
+- Influencers: analyze their niche, content themes, audience demographics
+- Artists/creatives: analyze their art style, themes, creative direction
+- Personal accounts: analyze their interests, lifestyle, content themes
+
+Be specific and detailed. If information is limited, make reasonable inferences based on available data (bio, name, follower count, etc.).
+Format as a clear, structured summary that can be used to inform video content creation that matches their style and audience."""
+
+            completion = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are a social media strategist and content analyst. Analyze Instagram profiles (business, personal, creator, influencer, etc.) to understand their context, style, audience, and content themes. Work with all account types equally well."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=500
+            )
+            
+            context_summary = completion.choices[0].message.content
+            print(f"[OpenAI] Profile context researched: {len(context_summary)} characters")
+            return context_summary
+            
+        except Exception as e:
+            print(f"[OpenAI] Error researching profile context: {str(e)}")
+            return f"Profile context: {profile_context.get('full_name', '')} - {profile_context.get('biography', 'No bio available')}"
     
     async def transcribe_video(self, video_path: str) -> str:
         """Transcribe video using Whisper API"""
@@ -46,7 +189,7 @@ class OpenAIService:
             print(f"[OpenAI] Transcription error: {str(e)}")
             raise Exception(f"Transcription error: {str(e)}")
     
-    async def generate_sora_script(self, transcription: str, video_metadata: Dict, target_duration: int = 8) -> str:
+    async def generate_sora_script(self, transcription: str, video_metadata: Dict, target_duration: int = 8, page_context: Optional[str] = None, llm_provider: str = "openai") -> str:
         """
         Generate basic Sora script (legacy method for backward compatibility)
         
@@ -57,10 +200,20 @@ class OpenAIService:
             # Check if transcription is valid
             has_valid_transcription = not transcription.startswith("[") and len(transcription) > 20
             
-            if has_valid_transcription:
-                prompt = f"""Based on this video transcription and metrics, create a detailed Sora AI video generation prompt for a {target_duration}-second video.
+            # Build context section
+            context_section = ""
+            if page_context:
+                context_section = f"""
+PAGE/PROFILE CONTEXT:
+{page_context}
 
-TRANSCRIPTION:
+This context should inform the video's messaging, tone, and visual style to align with the page/account identity (works for business, personal, creator, influencer accounts, etc.).
+"""
+            
+            if has_valid_transcription:
+                prompt = f"""Based on this video transcription, metrics, and page context, create a detailed Sora AI video generation prompt for a {target_duration}-second video.
+
+{context_section}TRANSCRIPTION:
 {transcription}
 
 VIDEO METRICS:
@@ -70,12 +223,12 @@ VIDEO METRICS:
 
 TARGET DURATION: {target_duration} seconds
 
-Create a Sora prompt that captures the core concept, visual style, camera work, timing, and engagement factors. Start the prompt with "Create a {target_duration}-second video..."."""
+Create a Sora prompt that captures the core concept, visual style, camera work, timing, and engagement factors. The prompt should align with the page/profile context provided above. Start the prompt with "Create a {target_duration}-second video..."."""
             else:
                 # No valid transcription - use caption and metrics only
-                prompt = f"""Based on this Instagram video's caption and engagement metrics, create a detailed Sora AI video generation prompt for a {target_duration}-second video.
+                prompt = f"""Based on this Instagram video's caption, engagement metrics, and page context, create a detailed Sora AI video generation prompt for a {target_duration}-second video.
 
-VIDEO CAPTION:
+{context_section}VIDEO CAPTION:
 {video_metadata.get('text', 'No caption available')}
 
 VIDEO METRICS:
@@ -86,24 +239,40 @@ TARGET DURATION: {target_duration} seconds
 
 NOTE: Audio transcription was not available for this video (may be music-only or no audio).
 
-Create a Sora prompt that captures likely visual style, camera work, timing, and engagement factors based on the caption and popularity metrics. Start the prompt with "Create a {target_duration}-second video..."."""
+Create a Sora prompt that captures likely visual style, camera work, timing, and engagement factors based on the caption, popularity metrics, and page/profile context. Start the prompt with "Create a {target_duration}-second video..."."""
 
-            completion = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are an expert video production director creating Sora AI prompts."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7
-            )
-            
-            return completion.choices[0].message.content
+            # Use OpenAI or Claude based on provider
+            if llm_provider.lower() == "claude" and self.claude_available:
+                print(f"[Claude] Generating Sora script with Claude...")
+                message = await self.claude_client.messages.create(
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=1000,
+                    temperature=0.7,
+                    system="You are an expert video production director creating Sora AI prompts.",
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                return message.content[0].text
+            else:
+                # Default to OpenAI
+                if llm_provider.lower() == "claude":
+                    print(f"[Warning] Claude requested but not available, falling back to OpenAI")
+                completion = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": "You are an expert video production director creating Sora AI prompts."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.7
+                )
+                return completion.choices[0].message.content
             
         except Exception as e:
             raise Exception(f"Sora script generation error: {str(e)}")
     
     
-    async def generate_structured_sora_script(self, transcription: str, video_metadata: Dict, thumbnail_analysis: Optional[ThumbnailAnalysis] = None, target_duration: int = 8) -> StructuredSoraScript:
+    async def generate_structured_sora_script(self, transcription: str, video_metadata: Dict, thumbnail_analysis: Optional[ThumbnailAnalysis] = None, target_duration: int = 8, page_context: Optional[str] = None) -> StructuredSoraScript:
         """
         Generate structured Sora script using OpenAI Structured Outputs (Build Hours Feature)
         Guarantees valid, consistent JSON structure matching StructuredSoraScript schema
@@ -112,8 +281,17 @@ Create a Sora prompt that captures likely visual style, camera work, timing, and
             target_duration: Target video duration in seconds (5-16)
         """
         try:
-            # Build context including thumbnail analysis if available
-            context = f"""TRANSCRIPTION:
+            # Build context including page context and thumbnail analysis if available
+            context = ""
+            if page_context:
+                context += f"""PAGE/PROFILE CONTEXT:
+{page_context}
+
+This context should inform the video's messaging, tone, visual style, and overall approach to align with the page/account identity (works for business, personal, creator, influencer accounts, etc.).
+
+"""
+            
+            context += f"""TRANSCRIPTION:
 {transcription}
 
 VIDEO METRICS:
@@ -133,19 +311,21 @@ VISUAL ANALYSIS (from thumbnail):
 - Visual Elements: {', '.join(thumbnail_analysis.visual_elements)}
 - Style: {thumbnail_analysis.style_assessment}"""
 
-            prompt = f"""Based on this video data, create a comprehensive Sora AI video generation prompt.
+            prompt = f"""Based on this video data and page/profile context, create a comprehensive Sora AI video generation prompt.
 
 {context}
 
 IMPORTANT: The generated video MUST be exactly {target_duration} seconds long. Structure your timing and pacing to fit this duration precisely.
 
 Analyze what made this video successful and create a detailed, structured Sora prompt that captures:
-1. Core concept and message
-2. Visual style (colors, lighting, mood, references)
+1. Core concept and message (aligned with the page/profile context)
+2. Visual style (colors, lighting, mood, references) that matches the account identity
 3. Camera work (shot types, movements, angles)
 4. Timing and pacing structure (MUST fit {target_duration} seconds)
 5. Engagement optimization based on metrics
+6. Consistency with the page/profile context provided (works for business, personal, creator, influencer accounts, etc.)
 
+The video should feel authentic to the page/account while maintaining the successful elements from the analyzed video.
 In the full_prompt field, explicitly state "Create a {target_duration}-second video..." at the beginning.
 Make it actionable and ready for Sora AI."""
 

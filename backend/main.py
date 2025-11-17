@@ -8,18 +8,27 @@ from dotenv import load_dotenv
 
 from services.instagram_api import InstagramAPIService
 from services.openai_service import OpenAIService
+from services.linkedin_api import LinkedInAPIService
 from models.schemas import VideoAnalysisRequest, VideoAnalysisResponse, ScrapedVideo, VideoResult
 
 # Load environment variables (try .env file first, then system environment)
-load_dotenv()  # This loads from .env if it exists (local development)
+# Get the directory where main.py is located
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, '.env'))  # This loads from .env if it exists (local development)
 
-# Get API key from environment variable
+# Get API keys from environment variables
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY environment variable is required. Please set it in Render Environment Variables or backend/.env file")
 
-print(f"[DEBUG] Using API key: {OPENAI_API_KEY[:20]}...{OPENAI_API_KEY[-4:]}")
+if ANTHROPIC_API_KEY:
+    print(f"[DEBUG] Anthropic API key found: {ANTHROPIC_API_KEY[:20]}...{ANTHROPIC_API_KEY[-4:]}")
+else:
+    print("[DEBUG] ANTHROPIC_API_KEY not found. Claude features will be disabled.")
+
+print(f"[DEBUG] Using OpenAI API key: {OPENAI_API_KEY[:20]}...{OPENAI_API_KEY[-4:]}")
 
 app = FastAPI(title="Instagram Video to Sora Script Generator")
 
@@ -41,9 +50,10 @@ app.add_middleware(
 
 # Initialize services
 instagram_service = InstagramAPIService()
+linkedin_service = LinkedInAPIService()
 # Check for fine-tuned model in environment
 fine_tuned_model = os.getenv("OPENAI_FINE_TUNED_MODEL")
-openai_service = OpenAIService(api_key=OPENAI_API_KEY, fine_tuned_model=fine_tuned_model)
+openai_service = OpenAIService(api_key=OPENAI_API_KEY, anthropic_key=ANTHROPIC_API_KEY, fine_tuned_model=fine_tuned_model)
 
 
 @app.get("/")
@@ -67,7 +77,16 @@ async def analyze_videos(request: VideoAnalysisRequest):
     Scrape videos from Instagram, transcribe them, and generate Sora scripts with OpenAI Build Hours features.
     """
     try:
-        # Step 1: Scrape videos from Instagram
+        # Step 1: Extract profile context for all account types (business, personal, creator, etc.)
+        print(f"[API] 📋 Extracting profile context for: @{request.username}")
+        profile_context = await instagram_service.get_profile_context(request.username)
+        
+        # Step 2: Research profile/page context using GPT-4 (works for all account types)
+        print(f"[API] 🔍 Researching profile context (works for all account types)...")
+        page_context = await openai_service.research_profile_context(profile_context)
+        print(f"[API] ✓ Profile context researched: {len(page_context)} characters")
+        
+        # Step 3: Scrape videos from Instagram
         print(f"[API] Analyzing Instagram user: @{request.username}")
         videos = await instagram_service.get_user_videos(
             username=request.username,
@@ -82,8 +101,8 @@ async def analyze_videos(request: VideoAnalysisRequest):
         # Convert to ScrapedVideo objects for response
         scraped_videos = [ScrapedVideo(**v) for v in videos]
         
-        # Step 2: Process each video with Build Hours features (analysis phase)
-        print(f"[API] 🔄 Phase 1: Analyzing videos (transcription + script generation)...")
+        # Step 4: Process each video with Build Hours features (analysis phase)
+        print(f"[API] 🔄 Phase 1: Analyzing videos (transcription + script generation with context)...")
         analyzed_results = []
         video_data_for_sora = []  # Store data for parallel Sora generation
         
@@ -110,8 +129,9 @@ async def analyze_videos(request: VideoAnalysisRequest):
                 print(f"[API] Transcribing video...")
                 transcription = await openai_service.transcribe_video(video_path)
                 
-                # Generate regular Sora script (always works as fallback)
-                print(f"[API] Generating Sora script...")
+                # Generate regular Sora script (always works as fallback) with page context
+                llm_provider = request.llm_provider or "openai"
+                print(f"[API] Generating Sora script with page context using {llm_provider}...")
                 sora_script = await openai_service.generate_sora_script(
                     transcription=transcription,
                     video_metadata={
@@ -119,13 +139,15 @@ async def analyze_videos(request: VideoAnalysisRequest):
                         'likes': video['likes'],
                         'text': video['text']
                     },
-                    target_duration=request.video_seconds or 8
+                    target_duration=request.video_seconds or 8,
+                    page_context=page_context,
+                    llm_provider=llm_provider
                 )
                 
-                # Try to generate structured Sora script (OpenAI Build Hours)
+                # Try to generate structured Sora script (OpenAI Build Hours) with page context
                 structured_sora = None
                 try:
-                    print(f"[API] 📐 Generating structured Sora script (Build Hours: Structured Outputs)...")
+                    print(f"[API] 📐 Generating structured Sora script with page context (Build Hours: Structured Outputs)...")
                     structured_sora = await openai_service.generate_structured_sora_script(
                         transcription=transcription,
                         video_metadata={
@@ -135,7 +157,8 @@ async def analyze_videos(request: VideoAnalysisRequest):
                             'duration': video.get('duration', 0)
                         },
                         thumbnail_analysis=thumbnail_analysis,  # Include Vision API data
-                        target_duration=request.video_seconds or 8  # Pass user's desired duration
+                        target_duration=request.video_seconds or 8,  # Pass user's desired duration
+                        page_context=page_context
                     )
                     print(f"[API] ✓ Structured output generated successfully")
                 except Exception as struct_error:
@@ -238,6 +261,7 @@ async def analyze_videos(request: VideoAnalysisRequest):
         
         return VideoAnalysisResponse(
             username=request.username,
+            page_context=page_context,
             scraped_videos=scraped_videos,
             analyzed_videos=analyzed_results
         )
@@ -265,8 +289,21 @@ async def analyze_multi_users(request: dict):
         
         all_videos = []
         all_results = []
+        user_contexts = {}  # Store profile context for each user
         
-        # Step 1: Scrape videos from each user
+        # Step 1: Extract profile context for each user
+        print(f"[API] 📋 Extracting profile contexts for all users...")
+        for username in multi_request.usernames:
+            try:
+                profile_context = await instagram_service.get_profile_context(username)
+                page_context = await openai_service.research_profile_context(profile_context)
+                user_contexts[username] = page_context
+                print(f"[API] ✓ Context extracted for @{username}: {len(page_context)} characters")
+            except Exception as context_error:
+                print(f"[API] ⚠️ Could not extract context for @{username}: {context_error}")
+                user_contexts[username] = None
+        
+        # Step 2: Scrape videos from each user
         for username in multi_request.usernames:
             try:
                 print(f"[API] Scraping @{username}...")
@@ -293,7 +330,7 @@ async def analyze_multi_users(request: dict):
         
         print(f"[API] Total videos collected: {len(all_videos)}")
         
-        # Step 2: Process each video
+        # Step 3: Process each video
         for video in all_videos:
             try:
                 video_path = await instagram_service.download_video(video['video_url'], video['id'])
@@ -309,18 +346,26 @@ async def analyze_multi_users(request: dict):
                 # Transcribe
                 transcription = await openai_service.transcribe_video(video_path)
                 
-                # Generate regular Sora script
+                # Get context for this video's source user
+                source_username = video.get('source_username', '')
+                page_context = user_contexts.get(source_username)
+                
+                # Generate regular Sora script with context
+                llm_provider = multi_request.llm_provider or "openai"
                 sora_script = await openai_service.generate_sora_script(
                     transcription=transcription,
                     video_metadata={
                         "views": video['views'],
                         "likes": video['likes'],
                         "original_text": video['text'],
-                        "username": video['source_username']
-                    }
+                        "username": source_username
+                    },
+                    target_duration=multi_request.video_seconds or 12,
+                    page_context=page_context,
+                    llm_provider=llm_provider
                 )
                 
-                # Try structured output
+                # Try structured output with context
                 structured_script = None
                 try:
                     structured_script = await openai_service.generate_structured_sora_script(
@@ -329,9 +374,11 @@ async def analyze_multi_users(request: dict):
                             "views": video['views'],
                             "likes": video['likes'],
                             "original_text": video['text'],
-                            "username": video['source_username']
+                            "username": source_username
                         },
-                        thumbnail_analysis=thumbnail_analysis
+                        thumbnail_analysis=thumbnail_analysis,
+                        target_duration=multi_request.video_seconds or 12,
+                        page_context=page_context
                     )
                 except Exception as structured_error:
                     print(f"[API] Structured output skipped: {structured_error}")
@@ -862,6 +909,299 @@ async def list_batch_jobs():
         }
         
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/linkedin/chat")
+async def linkedin_chat(request: dict):
+    """
+    AI chat interface for LinkedIn trending video generation.
+    The AI scrapes LinkedIn trends and creates Sora videos based on conversation.
+    """
+    try:
+        from openai import AsyncOpenAI
+        
+        message = request.get("message", "")
+        conversation_history = request.get("conversation_history", [])
+        
+        if not message:
+            raise HTTPException(status_code=400, detail="Message is required")
+        
+        print(f"[LinkedIn Chat] User message: {message}")
+        
+        # Use GPT-4 to understand user intent
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        
+        # Build conversation context
+        chat_messages = [
+            {
+                "role": "system",
+                "content": """You are an AI assistant that helps users create viral Sora videos based on LinkedIn trending topics.
+
+Your capabilities:
+1. Scrape LinkedIn trending topics by industry, keyword, or general trends
+2. Analyze trending topics and explain why they're important
+3. Generate compelling Sora video scripts based on trends
+4. Create actual Sora videos from the scripts
+
+When users ask about trends:
+- Return trending topics with descriptions
+- Explain engagement levels and sentiment
+- Suggest which would make the best video
+
+When users ask to create a video:
+- Pick the most relevant trending topic
+- Generate a cinematic Sora script (8-12 seconds)
+- Include visual style, camera work, and mood
+
+Always be helpful, creative, and business-focused."""
+            }
+        ]
+        
+        # Add conversation history (last 5 messages for context)
+        for msg in conversation_history[-5:]:
+            if msg.get("role") in ["user", "assistant"]:
+                chat_messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+        
+        # Add current message
+        chat_messages.append({"role": "user", "content": message})
+        
+        # Get AI response to determine intent
+        intent_response = await client.chat.completions.create(
+            model="gpt-4o-2024-08-06",
+            messages=chat_messages,
+            temperature=0.7,
+            max_tokens=500
+        )
+        
+        ai_message = intent_response.choices[0].message.content
+        
+        # Determine if we should scrape trends or generate video
+        message_lower = message.lower()
+        should_scrape = any(word in message_lower for word in ["trending", "trends", "what's", "show me", "find", "popular", "hot topics"])
+        should_generate_video = any(word in message_lower for word in ["create", "make", "generate", "video", "sora"])
+        
+        response_data = {
+            "message": ai_message,
+            "trends": None,
+            "sora_script": None,
+            "sora_video_job": None,
+            "awaiting_selection": False
+        }
+        
+        # Check if user is selecting a topic (by number)
+        is_selecting_topic = any(word in message_lower for word in ["1", "2", "3", "first", "second", "third", "number"])
+        
+        # Scrape LinkedIn trends and generate video
+        if should_scrape or should_generate_video:
+            # Extract topic/industry from message
+            query = None
+            for word in ["ai", "remote work", "sustainability", "cybersecurity", "leadership", "web3", "mental health", "creator"]:
+                if word in message_lower:
+                    query = word
+                    break
+            
+            trends = await linkedin_service.scrape_trending_topics(query=query, limit=3)
+            response_data["trends"] = trends
+            
+            # Auto-generate video for the first/best trend
+            if trends and len(trends) > 0:
+                selected_trend = trends[0]
+                print(f"[LinkedIn Chat] Auto-generating Sora video for: {selected_trend['topic']}")
+                
+                # Research topic context using GPT-4
+                topic_context = await openai_service.research_topic_context(selected_trend)
+                
+                # Generate Sora script based on the trend with context
+                script_prompt = f"""Create a compelling 8-second Sora video script for this LinkedIn trending topic:
+
+TOPIC CONTEXT:
+{topic_context}
+
+TRENDING TOPIC DETAILS:
+- Topic: {selected_trend['topic']}
+- Description: {selected_trend['description']}
+- Engagement: {selected_trend['engagement']}
+- Hashtags: {', '.join(selected_trend['hashtags'])}
+- Sentiment: {selected_trend['sentiment']}
+- Industry: {selected_trend.get('industry', 'General Business')}
+
+Create a professional, attention-grabbing video that would go viral on LinkedIn. The video should:
+- Align with the topic context and industry understanding
+- Use visual style appropriate for the professional audience
+- Include dynamic camera movements
+- Feature key scenes that resonate with LinkedIn professionals
+- Maintain a professional, authoritative tone
+
+Keep it concise and impactful for LinkedIn's professional audience."""
+
+                script_response = await client.chat.completions.create(
+                    model="gpt-4o-2024-08-06",
+                    messages=[
+                        {"role": "system", "content": "You are an expert video director creating Sora scripts for LinkedIn viral content."},
+                        {"role": "user", "content": script_prompt}
+                    ],
+                    temperature=0.8,
+                    max_tokens=400
+                )
+                
+                sora_script = script_response.choices[0].message.content
+                response_data["sora_script"] = sora_script
+                
+                # Generate actual Sora video
+                print(f"[LinkedIn Chat] Creating Sora video...")
+                try:
+                    sora_job = await openai_service.generate_sora_video(
+                        prompt=sora_script,
+                        model="sora-2",
+                        size="1280x720",
+                        seconds=8
+                    )
+                    
+                    from models.schemas import SoraVideoJob
+                    response_data["sora_video_job"] = {
+                        "job_id": sora_job["job_id"],
+                        "status": sora_job["status"],
+                        "progress": sora_job.get("progress"),
+                        "model": sora_job["model"],
+                        "created_at": sora_job["created_at"]
+                    }
+                    
+                    # Update AI message to include video generation status
+                    response_data["message"] = f"✨ Perfect! Generating a Sora video for: **{selected_trend['topic']}**\n\n🎬 Your video is being created and will be ready in 30-60 seconds..."
+                    response_data["awaiting_selection"] = False
+                    
+                except Exception as video_error:
+                    print(f"[LinkedIn Chat] Sora video generation failed: {video_error}")
+                    response_data["message"] = f"✨ Script created for: **{selected_trend['topic']}**\n\n⚠️ Video generation encountered an issue. You can try again."
+                    response_data["awaiting_selection"] = False
+        
+        return response_data
+        
+    except Exception as e:
+        print(f"[LinkedIn Chat] Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/chat/general")
+async def general_chat(request: dict):
+    """
+    General AI chat interface for answering questions about VideoHook platform.
+    The AI can explain features, guide users, and provide information about the program.
+    """
+    try:
+        from openai import AsyncOpenAI
+        
+        message = request.get("message", "")
+        conversation_history = request.get("conversation_history", [])
+        
+        if not message:
+            raise HTTPException(status_code=400, detail="Message is required")
+        
+        print(f"[General Chat] User message: {message}")
+        
+        # Use GPT-4 to answer questions about the program
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        
+        # Build conversation context with comprehensive program information
+        chat_messages = [
+            {
+                "role": "system",
+                "content": """You are an AI assistant for VideoHook, a platform that helps creators generate viral video hooks using AI.
+
+VIDEOHOOK PLATFORM OVERVIEW:
+VideoHook is an AI-powered video generation platform that transforms social media content into professional Sora videos.
+
+KEY FEATURES:
+
+1. INSTAGRAM VIDEO ANALYSIS:
+   - Scrapes videos from any Instagram creator
+   - Uses Whisper API for automatic transcription
+   - GPT-4 Vision API analyzes video thumbnails for visual context
+   - Generates Sora video scripts based on successful Instagram content
+   - Supports single user analysis or multi-user style fusion
+   - Creates new viral videos inspired by top-performing content
+
+2. LINKEDIN TRENDING VIDEO GENERATOR:
+   - Scrapes trending topics from LinkedIn
+   - Analyzes engagement, sentiment, and hashtags
+   - AI conversational interface to discuss trends
+   - Generates professional Sora videos from trending topics
+   - Perfect for B2B and professional content creators
+
+3. SORA VIDEO GENERATION:
+   - Uses OpenAI Sora API to create actual videos
+   - Generates 5-16 second professional videos
+   - Supports structured outputs for consistent quality
+   - Batch processing available for multiple videos
+   - Videos are ready to download and share
+
+4. AI CAPABILITIES:
+   - GPT-4 with Structured Outputs for reliable script generation
+   - Whisper API for accurate video transcription
+   - GPT-4 Vision for visual analysis
+   - Fine-tuning support for custom models
+   - Batch API for cost-effective processing
+
+TECHNICAL STACK:
+- Backend: Python FastAPI
+- Frontend: React
+- AI: OpenAI GPT-4, Whisper, Vision API, Sora
+- Video Processing: Sora API
+
+HOW IT WORKS:
+1. User provides Instagram username or LinkedIn topic
+2. Platform scrapes and analyzes content
+3. AI generates optimized Sora video scripts
+4. Sora creates professional videos
+5. User downloads and shares videos
+
+Your role is to:
+- Explain how VideoHook works
+- Guide users through features
+- Answer questions about Instagram and LinkedIn tools
+- Explain Sora video generation
+- Help users understand the platform capabilities
+- Be friendly, helpful, and informative
+
+Always provide clear, concise answers and guide users to the right tools for their needs."""
+            }
+        ]
+        
+        # Add conversation history (last 10 messages for better context)
+        for msg in conversation_history[-10:]:
+            if msg.get("role") in ["user", "assistant"]:
+                chat_messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+        
+        # Add current message
+        chat_messages.append({"role": "user", "content": message})
+        
+        # Get AI response
+        response = await client.chat.completions.create(
+            model="gpt-4o-2024-08-06",
+            messages=chat_messages,
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        ai_message = response.choices[0].message.content
+        
+        return {
+            "message": ai_message
+        }
+        
+    except Exception as e:
+        print(f"[General Chat] Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 

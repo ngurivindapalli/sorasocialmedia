@@ -6,6 +6,7 @@ class VideoAnalysisRequest(BaseModel):
     username: str = Field(..., description="Instagram username to analyze")
     video_limit: Optional[int] = Field(3, description="Number of videos to analyze (default: 3, max: 10)")
     video_seconds: Optional[int] = Field(8, description="Duration of generated videos in seconds (5-16, default: 8)")
+    llm_provider: Optional[str] = Field("openai", description="LLM provider for script generation: 'openai' or 'claude'")
 
 
 class MultiUserAnalysisRequest(BaseModel):
@@ -14,6 +15,7 @@ class MultiUserAnalysisRequest(BaseModel):
     videos_per_user: Optional[int] = Field(2, description="Number of top videos per user (default: 2)")
     combine_style: Optional[str] = Field("fusion", description="How to combine: 'fusion' (blend both styles) or 'sequence' (sequential story)")
     video_seconds: Optional[int] = Field(12, description="Duration of combined video in seconds (5-16, default: 12)")
+    llm_provider: Optional[str] = Field("openai", description="LLM provider for script generation: 'openai' or 'claude'")
 
 
 class ScrapedVideo(BaseModel):
@@ -101,6 +103,7 @@ class VideoResult(BaseModel):
 class VideoAnalysisResponse(BaseModel):
     """Response with scraped videos and analysis"""
     username: str
+    page_context: Optional[str] = Field(None, description="AI-learned context about the page/profile")
     scraped_videos: List[ScrapedVideo]
     analyzed_videos: List[VideoResult]
 
