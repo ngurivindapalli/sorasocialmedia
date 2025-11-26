@@ -7,16 +7,32 @@ import LinkedInTools from './LinkedInTools'
 import TikTokTools from './TikTokTools'
 import XTools from './XTools'
 import GeneralChat from './GeneralChat'
-import { Menu, X as XIcon, Instagram, Linkedin, Music, MessageSquare } from 'lucide-react'
+import Settings from './Settings'
+import { Menu, X as XIcon, Instagram, Linkedin, Music, MessageSquare, Settings as SettingsIcon } from 'lucide-react'
 import '../App.css'
 
 function Dashboard() {
-  const [activeTab, setActiveTab] = useState('chat')
+  // Persist activeTab in localStorage so it doesn't reset
+  // Default to 'instagram' for testing - teammates can test Veo generation
+  const [activeTab, setActiveTab] = useState(() => {
+    const saved = localStorage.getItem('videohook_activeTab')
+    return saved || 'instagram'
+  })
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const navigate = useNavigate()
   const currentUser = authUtils.getCurrentUser()
   const [isVisible, setIsVisible] = useState({})
   const sectionRefs = useRef({})
+
+  // Save activeTab to localStorage when it changes
+  useEffect(() => {
+    localStorage.setItem('videohook_activeTab', activeTab)
+  }, [activeTab])
+
+  // Skip authentication check - allow direct access to dashboard
+  // useEffect(() => {
+  //   // Authentication is optional now
+  // }, [navigate])
 
   // Scroll fade-in effect using Intersection Observer
   useEffect(() => {
@@ -57,8 +73,10 @@ function Dashboard() {
   }, [])
 
   const handleLogout = () => {
+    // No logout needed - just clear any stored data
     authUtils.logout()
-    navigate('/login')
+    // Stay on dashboard - no redirect needed
+    window.location.reload()
   }
 
   const socialMediaTabs = [
@@ -67,9 +85,11 @@ function Dashboard() {
     { id: 'instagram', label: 'Instagram', icon: Instagram },
     { id: 'tiktok', label: 'TikTok', icon: Music },
     { id: 'x', label: 'X', icon: XIcon },
+    { id: 'settings', label: 'Settings', icon: SettingsIcon },
   ]
 
   const renderContent = () => {
+    console.log('Rendering content for tab:', activeTab)
     switch (activeTab) {
       case 'linkedin':
         return <LinkedInTools />
@@ -79,11 +99,18 @@ function Dashboard() {
         return <TikTokTools />
       case 'x':
         return <XTools />
+      case 'settings':
+        return <Settings />
       case 'chat':
       default:
         return <GeneralChat />
     }
   }
+
+  // Log activeTab changes
+  useEffect(() => {
+    console.log('Active tab changed to:', activeTab)
+  }, [activeTab])
 
   return (
     <div 
@@ -120,36 +147,9 @@ function Dashboard() {
           </div>
           <div className="flex items-center gap-6">
             <span className="text-sm text-[#4b5563]" style={{ fontSize: '14px' }}>
-              {currentUser?.username}
+              {currentUser?.username || 'Guest'}
             </span>
-            <button
-              onClick={handleLogout}
-              className="px-5 py-2 text-sm font-medium rounded-lg smooth-hover"
-              style={{
-                paddingLeft: '20px',
-                paddingRight: '20px',
-                paddingTop: '8px',
-                paddingBottom: '8px',
-                fontSize: '14px',
-                fontWeight: 500,
-                backgroundColor: 'transparent',
-                color: '#111827',
-                border: '1px solid #e5e7eb',
-                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = '#f9fafb'
-                e.currentTarget.style.borderColor = '#111827'
-                e.currentTarget.style.transform = 'translateY(-1px)'
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'transparent'
-                e.currentTarget.style.borderColor = '#e5e7eb'
-                e.currentTarget.style.transform = 'translateY(0)'
-              }}
-            >
-              Log out
-            </button>
+            {/* Logout button removed - no authentication required */}
           </div>
         </div>
       </header>
@@ -174,14 +174,21 @@ function Dashboard() {
               return (
                 <button
                   key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    console.log('Switching to tab:', tab.id)
+                    setActiveTab(tab.id)
+                  }}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all smooth-hover ${
                     isActive ? 'bg-[#111827] text-white' : 'text-[#4b5563] hover:bg-[#f9fafb]'
                   }`}
                   style={{
                     fontSize: '14px',
                     fontWeight: isActive ? 500 : 400,
-                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                    cursor: 'pointer'
                   }}
                   onMouseEnter={(e) => {
                     if (!isActive) {

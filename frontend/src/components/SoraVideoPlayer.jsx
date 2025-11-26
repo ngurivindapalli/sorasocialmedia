@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Download, Loader2, AlertCircle, CheckCircle2, Video } from 'lucide-react'
 import axios from 'axios'
 import VideoGenerationLoader from './VideoGenerationLoader'
-import InstagramManualPostButton from './InstagramManualPostButton'
+import InstagramManualPostButton from '@/components/InstagramManualPostButton'
 
 // API URL - uses environment variable for production
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
