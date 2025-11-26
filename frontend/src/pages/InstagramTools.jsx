@@ -17,10 +17,19 @@ function InstagramTools() {
   const [videosPerUser, setVideosPerUser] = useState(2)
   const [combineStyle, setCombineStyle] = useState('fusion')
   const [llmProvider, setLlmProvider] = useState('openai')
+  const [videoModel, setVideoModel] = useState('sora-2') // 'sora-2' or 'veo-3'
   const [loading, setLoading] = useState(false)
   const [generatingVideo, setGeneratingVideo] = useState(false)
   const [results, setResults] = useState(null)
   const [error, setError] = useState(null)
+  
+  // Informational video state
+  const [infoTopic, setInfoTopic] = useState('')
+  const [companyContext, setCompanyContext] = useState('')
+  const [keyPoints, setKeyPoints] = useState([''])
+  const [numImages, setNumImages] = useState(3)
+  const [infoVideoResult, setInfoVideoResult] = useState(null)
+  const [infoVideoJobStatus, setInfoVideoJobStatus] = useState(null) // Track video job status
 
   // Design tokens
   const { colors, typography, spacing, layout } = design
@@ -53,7 +62,16 @@ function InstagramTools() {
   }, [results])
 
   const handleAnalyze = async () => {
-    if (mode === 'single') {
+    if (mode === 'informational') {
+      if (!username.trim()) {
+        setError('Please enter an Instagram username to learn from')
+        return
+      }
+      if (!videoSeconds || videoSeconds < 5 || videoSeconds > 16) {
+        setError('Please enter a video duration between 5-16 seconds')
+        return
+      }
+    } else if (mode === 'single') {
       if (!username.trim()) {
         setError('Please enter an Instagram username')
         return
@@ -69,19 +87,46 @@ function InstagramTools() {
     setLoading(true)
     setError(null)
     setResults(null)
+    setInfoVideoResult(null)
     setGeneratingVideo(false) // Reset generating video state
 
     try {
-      if (mode === 'single') {
+      if (mode === 'informational') {
+        console.log('[Instagram] Calling informational video API with:', { 
+          username: username.trim().replace('@', ''),
+          target_duration: videoSeconds
+        })
+        console.log('[Instagram] API URL:', `${API_URL}/api/video/informational`)
+        
+        const requestPayload = {
+          username: username.trim().replace('@', ''),
+          target_duration: videoSeconds
+        }
+        console.log('[Instagram] Request payload:', requestPayload)
+        
+        const response = await axios.post(`${API_URL}/api/video/informational`, requestPayload, {
+          timeout: 600000 // 10 minute timeout for video processing (images + video)
+        })
+        
+        console.log('[Instagram] Informational video API Response received:', response.status)
+        console.log('[Instagram] Response data:', response.data)
+        
+        setInfoVideoResult(response.data)
+      } else if (mode === 'single') {
         console.log('[Instagram] Calling API with:', { username: username.trim().replace('@', ''), video_limit: videoLimit, video_seconds: videoSeconds })
         console.log('[Instagram] API URL:', `${API_URL}/api/analyze`)
         
-        const response = await axios.post(`${API_URL}/api/analyze`, {
+        const requestPayload = {
           username: username.trim().replace('@', ''),
           video_limit: videoLimit,
           video_seconds: videoSeconds,
-          llm_provider: llmProvider
-        }, {
+          llm_provider: llmProvider,
+          video_model: videoModel
+        }
+        console.log('[Instagram] Request payload:', requestPayload)
+        console.log('[Instagram] Selected video model:', videoModel)
+        
+        const response = await axios.post(`${API_URL}/api/analyze`, requestPayload, {
           timeout: 300000 // 5 minute timeout for video processing
         })
         
@@ -104,7 +149,8 @@ function InstagramTools() {
           usernames: validUsernames,
           videos_per_user: videosPerUser,
           combine_style: combineStyle,
-          video_seconds: videoSeconds
+          video_seconds: videoSeconds,
+          video_model: videoModel === 'sora-2' ? 'sora-2-pro' : videoModel // Use pro for multi-user
         })
         console.log('[Instagram] Multi-user API Response:', response.data)
         setResults({ type: 'multi', data: response.data })
@@ -259,6 +305,31 @@ function InstagramTools() {
           >
             Multi-User Fusion
           </button>
+          <button
+            onClick={() => setMode('informational')}
+            className="flex-1 py-3 px-6 rounded-lg text-sm font-medium transition-all"
+            style={{
+              backgroundColor: mode === 'informational' ? layout.navbar.primaryCta.background : 'transparent',
+              color: mode === 'informational' ? layout.navbar.primaryCta.textColor : colors.text.muted,
+              border: mode === 'informational' ? 'none' : `1px solid ${colors.borders.subtle}`,
+              fontSize: typography.sizes.sm,
+              fontWeight: typography.weights.medium,
+              fontFamily: typography.fontFamilies.body
+            }}
+            disabled={loading}
+            onMouseEnter={(e) => {
+              if (mode !== 'informational') {
+                e.currentTarget.style.color = colors.text.primary
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (mode !== 'informational') {
+                e.currentTarget.style.color = colors.text.muted
+              }
+            }}
+          >
+            Informational Videos
+          </button>
         </div>
 
         {mode === 'single' ? (
@@ -377,41 +448,77 @@ function InstagramTools() {
               </p>
             </div>
 
-            <div>
-              <label style={{ 
-                display: 'block',
-                fontSize: typography.sizes.sm, 
-                fontWeight: typography.weights.medium,
-                color: colors.text.primary,
-                marginBottom: spacing.scale.sm
-              }}>
-                LLM Provider for Script Generation
-              </label>
-              <select
-                value={llmProvider}
-                onChange={(e) => setLlmProvider(e.target.value)}
-                className="w-full px-4 py-3 rounded-lg focus:outline-none"
-                style={{
-                  backgroundColor: colors.background.section,
-                  border: `1px solid ${colors.borders.subtle}`,
+            <div className="grid md:grid-cols-2 gap-6">
+              <div>
+                <label style={{ 
+                  display: 'block',
+                  fontSize: typography.sizes.sm, 
+                  fontWeight: typography.weights.medium,
                   color: colors.text.primary,
-                  fontSize: typography.sizes.md
-                }}
-                disabled={loading}
-              >
-                <option value="openai">OpenAI (GPT-4)</option>
-                <option value="claude">Claude (Anthropic)</option>
-              </select>
-              <p style={{ 
-                fontSize: typography.sizes.xs, 
-                color: colors.text.lightMuted,
-                marginTop: spacing.scale.xs
-              }}>
-                Choose which AI model to use for generating video scripts
-              </p>
+                  marginBottom: spacing.scale.sm
+                }}>
+                  LLM Provider for Script Generation
+                </label>
+                <select
+                  value={llmProvider}
+                  onChange={(e) => setLlmProvider(e.target.value)}
+                  className="w-full px-4 py-3 rounded-lg focus:outline-none"
+                  style={{
+                    backgroundColor: colors.background.section,
+                    border: `1px solid ${colors.borders.subtle}`,
+                    color: colors.text.primary,
+                    fontSize: typography.sizes.md
+                  }}
+                  disabled={loading}
+                >
+                  <option value="openai">OpenAI (GPT-4)</option>
+                  <option value="claude">Claude (Anthropic)</option>
+                </select>
+                <p style={{ 
+                  fontSize: typography.sizes.xs, 
+                  color: colors.text.lightMuted,
+                  marginTop: spacing.scale.xs
+                }}>
+                  Choose which AI model to use for generating video scripts
+                </p>
+              </div>
+
+              <div>
+                <label style={{ 
+                  display: 'block',
+                  fontSize: typography.sizes.sm, 
+                  fontWeight: typography.weights.medium,
+                  color: colors.text.primary,
+                  marginBottom: spacing.scale.sm
+                }}>
+                  Video Generation Model
+                </label>
+                <select
+                  value={videoModel}
+                  onChange={(e) => setVideoModel(e.target.value)}
+                  className="w-full px-4 py-3 rounded-lg focus:outline-none"
+                  style={{
+                    backgroundColor: colors.background.section,
+                    border: `1px solid ${colors.borders.subtle}`,
+                    color: colors.text.primary,
+                    fontSize: typography.sizes.md
+                  }}
+                  disabled={loading}
+                >
+                  <option value="sora-2">Sora 2 (OpenAI)</option>
+                  <option value="veo-3">Veo 3 (Google)</option>
+                </select>
+                <p style={{ 
+                  fontSize: typography.sizes.xs, 
+                  color: colors.text.lightMuted,
+                  marginTop: spacing.scale.xs
+                }}>
+                  Choose which model to use for generating videos
+                </p>
+              </div>
             </div>
           </div>
-        ) : (
+        ) : mode === 'multi' ? (
           <div className="space-y-6 mb-8">
             <div>
               <label style={{ 
@@ -539,43 +646,79 @@ function InstagramTools() {
               </div>
             </div>
 
-            <div>
-              <label style={{ 
-                display: 'block',
-                fontSize: typography.sizes.sm, 
-                fontWeight: typography.weights.medium,
-                color: colors.text.primary,
-                marginBottom: spacing.scale.sm
-              }}>
-                Generated Video Duration (seconds)
-              </label>
-              <input
-                type="number"
-                min="5"
-                max="16"
-                value={videoSeconds}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value)
-                  if (val >= 5 && val <= 16) {
-                    setVideoSeconds(val)
-                  }
-                }}
-                className="w-full px-4 py-3 rounded-lg focus:outline-none"
-                style={{
-                  backgroundColor: colors.background.section,
-                  border: `1px solid ${colors.borders.subtle}`,
+            <div className="grid md:grid-cols-2 gap-6">
+              <div>
+                <label style={{ 
+                  display: 'block',
+                  fontSize: typography.sizes.sm, 
+                  fontWeight: typography.weights.medium,
                   color: colors.text.primary,
-                  fontSize: typography.sizes.md
-                }}
-                disabled={loading}
-              />
-              <p style={{ 
-                fontSize: typography.sizes.xs, 
-                color: colors.text.lightMuted,
-                marginTop: spacing.scale.xs
-              }}>
-                How long the combined fusion video should be (5-16 seconds)
-              </p>
+                  marginBottom: spacing.scale.sm
+                }}>
+                  Generated Video Duration (seconds)
+                </label>
+                <input
+                  type="number"
+                  min="5"
+                  max="16"
+                  value={videoSeconds}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value)
+                    if (val >= 5 && val <= 16) {
+                      setVideoSeconds(val)
+                    }
+                  }}
+                  className="w-full px-4 py-3 rounded-lg focus:outline-none"
+                  style={{
+                    backgroundColor: colors.background.section,
+                    border: `1px solid ${colors.borders.subtle}`,
+                    color: colors.text.primary,
+                    fontSize: typography.sizes.md
+                  }}
+                  disabled={loading}
+                />
+                <p style={{ 
+                  fontSize: typography.sizes.xs, 
+                  color: colors.text.lightMuted,
+                  marginTop: spacing.scale.xs
+                }}>
+                  How long the combined fusion video should be (5-16 seconds)
+                </p>
+              </div>
+
+              <div>
+                <label style={{ 
+                  display: 'block',
+                  fontSize: typography.sizes.sm, 
+                  fontWeight: typography.weights.medium,
+                  color: colors.text.primary,
+                  marginBottom: spacing.scale.sm
+                }}>
+                  Video Generation Model
+                </label>
+                <select
+                  value={videoModel}
+                  onChange={(e) => setVideoModel(e.target.value)}
+                  className="w-full px-4 py-3 rounded-lg focus:outline-none"
+                  style={{
+                    backgroundColor: colors.background.section,
+                    border: `1px solid ${colors.borders.subtle}`,
+                    color: colors.text.primary,
+                    fontSize: typography.sizes.md
+                  }}
+                  disabled={loading}
+                >
+                  <option value="sora-2">Sora 2 Pro (OpenAI)</option>
+                  <option value="veo-3">Veo 3 (Google)</option>
+                </select>
+                <p style={{ 
+                  fontSize: typography.sizes.xs, 
+                  color: colors.text.lightMuted,
+                  marginTop: spacing.scale.xs
+                }}>
+                  Choose which model to use for generating the combined video
+                </p>
+              </div>
             </div>
 
             <div 
@@ -593,7 +736,106 @@ function InstagramTools() {
               </p>
             </div>
           </div>
-        )}
+        ) : mode === 'informational' ? (
+          <div className="space-y-6 mb-8">
+            <div>
+              <label style={{ 
+                display: 'block',
+                fontSize: typography.sizes.sm, 
+                fontWeight: typography.weights.medium,
+                color: colors.text.primary,
+                marginBottom: spacing.scale.sm
+              }}>
+                Instagram Username *
+              </label>
+              <input
+                type="text"
+                placeholder="Enter Instagram username to learn from (e.g., welcome.ai)"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full px-4 py-3 rounded-lg focus:outline-none"
+                style={{
+                  backgroundColor: colors.background.section,
+                  border: `1px solid ${colors.borders.subtle}`,
+                  color: colors.text.primary,
+                  fontSize: typography.sizes.md
+                }}
+                disabled={loading}
+              />
+              <p style={{ 
+                fontSize: typography.sizes.xs, 
+                color: colors.text.lightMuted,
+                marginTop: spacing.scale.xs
+              }}>
+                AI will analyze this profile to understand your brand, style, and content themes
+              </p>
+            </div>
+
+            <div>
+              <label style={{ 
+                display: 'block',
+                fontSize: typography.sizes.sm, 
+                fontWeight: typography.weights.medium,
+                color: colors.text.primary,
+                marginBottom: spacing.scale.sm
+              }}>
+                Video Duration *
+              </label>
+              <input
+                type="number"
+                min="5"
+                max="16"
+                value={videoSeconds}
+                onChange={(e) => setVideoSeconds(parseInt(e.target.value) || 8)}
+                className="w-full px-4 py-3 rounded-lg focus:outline-none"
+                style={{
+                  backgroundColor: colors.background.section,
+                  border: `1px solid ${colors.borders.subtle}`,
+                  color: colors.text.primary,
+                  fontSize: typography.sizes.md
+                }}
+                disabled={loading}
+              />
+              <p style={{ 
+                fontSize: typography.sizes.xs, 
+                color: colors.text.lightMuted,
+                marginTop: spacing.scale.xs
+              }}>
+                How long should the video be? (5-16 seconds)
+              </p>
+            </div>
+
+            <div 
+              className="rounded-lg p-4"
+              style={{
+                backgroundColor: '#eff6ff',
+                border: '1px solid #bfdbfe'
+              }}
+            >
+              <p style={{ 
+                fontSize: typography.sizes.sm, 
+                color: '#1e40af'
+              }}>
+                ✨ <strong>Auto-Mode:</strong> AI will scrape the Instagram profile, analyze the content style and brand identity, then automatically generate images and video using Veo 3 that matches your page's aesthetic.
+              </p>
+            </div>
+
+            <div 
+              className="rounded-lg p-4"
+              style={{
+                backgroundColor: '#f0fdf4',
+                border: '1px solid #86efac'
+              }}
+            >
+              <p style={{ 
+                fontSize: typography.sizes.sm, 
+                color: '#166534'
+              }}>
+                📹 Informational Video Mode: Creates educational Instagram-style videos with AI-generated images from Nano Banana, incorporating your company context and key points.
+              </p>
+            </div>
+          </div>
+        ) : null}
 
         <button
           onClick={handleAnalyze}
@@ -629,13 +871,21 @@ function InstagramTools() {
                   '--base-gradient-color': '#ffffff'
                 }}
               >
-                Generating script...
+                {mode === 'informational' 
+                  ? 'Generating images and video...' 
+                  : mode === 'multi' 
+                    ? 'Analyzing multiple users...' 
+                    : 'Analyzing videos...'}
               </TextShimmer>
             </>
           ) : (
             <>
-              <Play className="w-5 h-5" />
-              Generate Sora Scripts
+              <Video className="w-5 h-5" />
+              {mode === 'informational' 
+                ? 'Create Informational Video' 
+                : mode === 'multi' 
+                  ? 'Analyze Multiple Users' 
+                  : 'Analyze Videos'}
             </>
           )}
         </button>
@@ -1129,6 +1379,168 @@ function InstagramTools() {
               </p>
             </div>
           ) : null}
+        </div>
+      )}
+
+      {/* Informational Video Results */}
+      {infoVideoResult && (
+        <div className="space-y-6">
+          <div 
+            className="rounded-2xl"
+            style={{
+              backgroundColor: colors.background.card,
+              border: `1px solid ${colors.borders.subtle}`,
+              borderRadius: '24px',
+              padding: spacing.scale['3xl'],
+              boxShadow: '0 18px 40px rgba(15,23,42,0.06)'
+            }}
+          >
+            <h3 style={{ 
+              fontSize: typography.sizes.sectionTitle, 
+              fontWeight: typography.weights.bold,
+              color: colors.text.primary,
+              marginBottom: spacing.scale.lg
+            }}>
+              📹 Informational Video: {infoVideoResult.topic}
+            </h3>
+
+            {/* Generated Images */}
+            {infoVideoResult.generated_images && infoVideoResult.generated_images.length > 0 && (
+              <div className="mb-6">
+                <h4 style={{ 
+                  fontSize: typography.sizes.lg, 
+                  fontWeight: typography.weights.semibold,
+                  color: colors.text.primary,
+                  marginBottom: spacing.scale.md
+                }}>
+                  🎨 Generated Images (Nano Banana)
+                </h4>
+                <div className="grid md:grid-cols-3 gap-4">
+                  {infoVideoResult.generated_images.map((img, idx) => (
+                    <div key={idx} className="rounded-lg overflow-hidden" style={{
+                      border: `1px solid ${colors.borders.subtle}`,
+                      backgroundColor: colors.background.section
+                    }}>
+                      {img.image_url && (
+                        <img 
+                          src={img.image_url} 
+                          alt={`Generated image ${idx + 1}`}
+                          className="w-full h-auto"
+                          style={{ display: 'block' }}
+                        />
+                      )}
+                      <div className="p-3">
+                        <p style={{ 
+                          fontSize: typography.sizes.xs, 
+                          color: colors.text.muted 
+                        }}>
+                          {infoVideoResult.image_prompts[idx] || `Image ${idx + 1}`}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Video Script */}
+            {infoVideoResult.video_script && (
+              <div className="mb-6">
+                <h4 style={{ 
+                  fontSize: typography.sizes.lg, 
+                  fontWeight: typography.weights.semibold,
+                  color: colors.text.primary,
+                  marginBottom: spacing.scale.md
+                }}>
+                  📝 Video Script
+                </h4>
+                <div className="rounded-lg p-4" style={{
+                  backgroundColor: colors.background.section,
+                  border: `1px solid ${colors.borders.subtle}`
+                }}>
+                  <p style={{ 
+                    color: colors.text.primary, 
+                    fontSize: typography.sizes.sm,
+                    lineHeight: typography.lineHeights.relaxed,
+                    whiteSpace: 'pre-wrap'
+                  }}>
+                    {infoVideoResult.video_script}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Generated Video */}
+            {infoVideoResult.video_job_id && (
+              <div className="mb-6">
+                <h4 style={{ 
+                  fontSize: typography.sizes.lg, 
+                  fontWeight: typography.weights.semibold,
+                  color: colors.text.primary,
+                  marginBottom: spacing.scale.md
+                }}>
+                  🎬 Generated Video ({infoVideoResult.video_model})
+                </h4>
+                <SoraVideoPlayer 
+                  videoJob={{
+                    job_id: infoVideoResult.video_job_id,
+                    status: infoVideoJobStatus?.status || 'in_progress',
+                    progress: infoVideoJobStatus?.progress || 0,
+                    video_url: infoVideoJobStatus?.video_url || null,
+                    model: infoVideoResult.video_model,
+                    created_at: Date.now()
+                  }}
+                  onStatusChange={(status, progress, videoUrl) => {
+                    setGeneratingVideo(status === 'in_progress' || status === 'queued')
+                    // Preserve the video job status
+                    setInfoVideoJobStatus({
+                      status,
+                      progress: progress || 0,
+                      video_url: videoUrl || null
+                    })
+                  }}
+                />
+              </div>
+            )}
+
+            {/* Composition Data */}
+            {infoVideoResult.composition_data && (
+              <div className="mt-6 p-4 rounded-lg" style={{
+                backgroundColor: '#f0f9ff',
+                border: '1px solid #bae6fd'
+              }}>
+                <h5 style={{ 
+                  fontSize: typography.sizes.md, 
+                  fontWeight: typography.weights.medium,
+                  color: colors.text.primary,
+                  marginBottom: spacing.scale.sm
+                }}>
+                  Video Structure
+                </h5>
+                {infoVideoResult.composition_data.narrative_structure && (
+                  <p style={{ 
+                    fontSize: typography.sizes.sm, 
+                    color: colors.text.muted,
+                    marginBottom: spacing.scale.sm
+                  }}>
+                    <strong>Narrative:</strong> {infoVideoResult.composition_data.narrative_structure}
+                  </p>
+                )}
+                {infoVideoResult.composition_data.text_overlays && infoVideoResult.composition_data.text_overlays.length > 0 && (
+                  <div>
+                    <strong style={{ fontSize: typography.sizes.sm, color: colors.text.primary }}>Text Overlays:</strong>
+                    <ul style={{ marginTop: spacing.scale.xs, paddingLeft: spacing.scale.lg }}>
+                      {infoVideoResult.composition_data.text_overlays.map((overlay, idx) => (
+                        <li key={idx} style={{ fontSize: typography.sizes.sm, color: colors.text.muted, marginBottom: spacing.scale.xs }}>
+                          {overlay}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
