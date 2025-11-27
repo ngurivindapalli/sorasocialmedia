@@ -15,37 +15,44 @@ This guide will walk you through deploying your FastAPI backend to Render's free
 3. Sign up with your GitHub account (easiest)
 4. Authorize Render to access your repositories
 
-## Step 2: Deploy Backend Using Blueprint (Easiest Method)
+## Step 2: Deploy Backend - Manual Setup (Free Tier)
 
-### Option A: Using render.yaml (Recommended)
+**Note:** Blueprints may require payment. For free tier, use manual setup instead:
 
-Your project already has a `render.yaml` file configured! This makes deployment super easy:
+### Manual Setup (Free Tier Recommended)
 
-1. **Go to Render Dashboard:**
-   - Visit [dashboard.render.com](https://dashboard.render.com)
-   - You should see your dashboard
-
-2. **Create New Blueprint:**
+1. **Create New Web Service:**
+   - Go to [dashboard.render.com](https://dashboard.render.com)
    - Click **"New +"** button (top right)
-   - Select **"Blueprint"**
+   - Select **"Web Service"** (NOT Blueprint)
 
-3. **Connect Repository:**
-   - Click **"Connect Repository"**
+2. **Connect Repository:**
+   - Click **"Connect Repository"** or **"Connect GitHub"**
+   - Authorize Render if needed
    - Find and select your repository (`sorasocialmedia` or your repo name)
    - Click **"Connect"**
 
-4. **Review Configuration:**
-   - Render will automatically detect your `render.yaml` file
-   - You'll see a preview showing:
-     - Service name: `sorasocialmedia-backend`
-     - Type: Web Service
-     - Runtime: Python
-     - Root Directory: `backend`
-   - Click **"Apply"**
+3. **Configure Service Settings:**
+   
+   **Basic Settings:**
+   - **Name:** `sorasocialmedia-backend` (or any name you prefer)
+   - **Region:** Choose closest to you (or leave default)
+   - **Branch:** `main`
+   - **Root Directory:** `backend` ⚠️ **IMPORTANT - Change from `./` to `backend`**
+   
+   **Build Settings:**
+   - **Runtime:** `Python 3`
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
+
+4. **Choose FREE Instance Type:**
+   - Scroll down to **"Instance Type"** section
+   - **Select "Free"** ⚠️ **This is important - don't select a paid plan!**
+   - You'll see it says "Free - 750 hours/month"
 
 5. **Set Environment Variables:**
-   - Render will prompt you to set environment variables
-   - Add these required variables:
+   - Scroll down to **"Environment Variables"** section
+   - Click **"Add Environment Variable"** for each:
      
      **Required:**
      - `OPENAI_API_KEY` = Your OpenAI API key
@@ -64,18 +71,21 @@ Your project already has a `render.yaml` file configured! This makes deployment 
      - `LINKEDIN_CLIENT_SECRET` = Your LinkedIn client secret
 
 6. **Deploy:**
+   - Review all settings
+   - Make sure **"Free"** instance type is selected
    - Click **"Create Web Service"**
    - Render will start building and deploying
    - This takes about 3-5 minutes
 
 7. **Get Your Backend URL:**
-   - Once deployment completes, you'll see your service
-   - Your backend URL will be: `https://sorasocialmedia-backend.onrender.com`
+   - Once deployment completes, you'll see your service dashboard
+   - Your backend URL will be shown at the top
+   - It will be: `https://sorasocialmedia-backend.onrender.com` (or your chosen name)
    - **Copy this URL** - you'll need it for your Vercel frontend!
 
 ---
 
-### Option B: Manual Setup (If Blueprint Doesn't Work)
+### Alternative: Blueprint Setup (May Require Payment)
 
 If the blueprint method doesn't work, you can set it up manually:
 
@@ -103,8 +113,10 @@ If the blueprint method doesn't work, you can set it up manually:
      - `OPENAI_API_KEY` = your key
      - Add other optional variables as needed
 
-5. **Choose Plan:**
-   - Select **"Free"** plan
+5. **⚠️ IMPORTANT: Choose FREE Instance Type:**
+   - Scroll down to **"Instance Type"** section
+   - **Select "Free"** (shows "Free - 750 hours/month")
+   - **DO NOT** select any paid plans (Starter, Standard, etc.)
    - Click **"Create Web Service"**
 
 6. **Wait for Deployment:**
