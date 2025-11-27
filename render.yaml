@@ -1,4 +1,5 @@
 services:
+  # Backend API Service
   - type: web
     name: sorasocialmedia-backend
     runtime: python
@@ -8,3 +9,14 @@ services:
     envVars:
       - key: OPENAI_API_KEY
         sync: false
+  
+  # Frontend Static Site (Vite)
+  - type: static
+    name: sorasocialmedia-frontend
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+        # Set this to your backend URL (e.g., https://sorasocialmedia-backend.onrender.com)
