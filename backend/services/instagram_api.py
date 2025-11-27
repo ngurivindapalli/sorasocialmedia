@@ -3,33 +3,12 @@ import os
 from typing import List, Dict, Optional
 import requests
 
-# Try to import Graph API service
-try:
-    from services.instagram_graph_api import InstagramGraphAPIService
-    GRAPH_API_AVAILABLE = True
-except ImportError:
-    GRAPH_API_AVAILABLE = False
-    print("[IG] Graph API service not available")
-
-
 class InstagramAPIService:
-    """Service for fetching Instagram videos - uses Graph API if available, falls back to scraping"""
+    """Service for fetching Instagram videos - uses instaloader scraping"""
     
     def __init__(self):
-        # Check if Graph API should be used
-        self.use_graph_api = os.getenv('INSTAGRAM_ACCESS_TOKEN', '') != ''
-        
-        if self.use_graph_api and GRAPH_API_AVAILABLE:
-            print("[IG] Using Instagram Graph API (official API - no blocking!)")
-            self.graph_api = InstagramGraphAPIService()
-            # Initialize scraper as fallback (but don't use it unless Graph API fails)
-            self._init_scraper()
-        else:
-            print("[IG] Using Instagram scraping (instaloader)")
-            if self.use_graph_api and not GRAPH_API_AVAILABLE:
-                print("[IG] ⚠️ Graph API token found but service unavailable. Using scraping instead.")
-            self.graph_api = None
-            self._init_scraper()
+        print("[IG] Using Instagram scraping (instaloader)")
+        self._init_scraper()
     
     def _init_scraper(self):
         # Configure instaloader with better user agent and rate limiting
@@ -98,12 +77,7 @@ class InstagramAPIService:
         print("[IG] Initialized with browser-like headers to avoid blocking")
     
     async def get_profile_context(self, username: str) -> Dict:
-        """Extract profile context - uses Graph API if available, otherwise scraping"""
-        # Use Graph API if available
-        if self.use_graph_api and self.graph_api:
-            return await self.graph_api.get_profile_context(username)
-        
-        # Fallback to scraping
+        """Extract profile context using scraping"""
         try:
             print(f"[IG] Extracting profile context for: {username}")
             
@@ -148,17 +122,7 @@ class InstagramAPIService:
             }
     
     async def get_user_videos(self, username: str, limit: int = 1) -> List[Dict]:
-        """Fetch videos from Instagram profile - uses Graph API if available, otherwise scraping"""
-        # Use Graph API if available
-        if self.use_graph_api and self.graph_api:
-            try:
-                return await self.graph_api.get_user_videos(username, limit)
-            except Exception as e:
-                print(f"[IG] Graph API failed: {str(e)}")
-                print(f"[IG] Falling back to scraping...")
-                # Fall through to scraping
-        
-        # Fallback to scraping
+        """Fetch videos from Instagram profile using scraping"""
         videos = []
         
         try:
@@ -304,11 +268,6 @@ class InstagramAPIService:
     
     async def download_video(self, video_url: str, video_id: str) -> str:
         """Download Instagram video to temporary file"""
-        # Use Graph API if available
-        if self.use_graph_api and self.graph_api:
-            return await self.graph_api.download_video(video_url, video_id)
-        
-        # Fallback to scraping method
         os.makedirs("temp", exist_ok=True)
         file_path = f"temp/ig_{video_id}.mp4"
         

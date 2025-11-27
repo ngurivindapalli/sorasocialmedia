@@ -193,9 +193,27 @@ class ImageGenerationService:
         print(f"[ImageGen] Generating image with Gemini 3 Pro Image via Vertex AI")
         print(f"[ImageGen] Prompt: {prompt[:100]}...")
         
+        # Try authentication methods in order, with fallback on 401 errors
+        access_token = None
+        auth_methods_tried = []
+        
+        # Try VEO3_API_KEY first (if set)
+        veo3_api_key = os.getenv('VEO3_API_KEY', '')
+        if veo3_api_key:
+            try:
+                access_token = veo3_api_key
+                auth_methods_tried.append("VEO3_API_KEY")
+                print(f"[ImageGen] Trying VEO3_API_KEY for authentication...")
+            except Exception as e:
+                print(f"[ImageGen] VEO3_API_KEY failed: {e}")
+        
+        # If VEO3_API_KEY fails with 401, try other methods
+        # We'll test the token by making a request, and if it fails with 401, try next method
+        
         try:
             # Get Google Cloud access token (same method as Veo 3)
-            access_token = await self._get_google_cloud_token()
+            if not access_token:
+                access_token = await self._get_google_cloud_token()
             
             # Convert size to aspect ratio for Gemini 3 Pro Image
             # Supported aspect ratios: 1:1, 3:2, 2:3, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9
@@ -278,22 +296,53 @@ class ImageGenerationService:
                                         self.location = location
                                     # Break out of all loops
                                     break
-                                else:
-                                    # Check if it's a 404 (model not found)
-                                    if response.status_code == 404:
-                                        error_text = response.text[:500] if response.text else ""
-                                        if url == url2:
-                                            # If second URL format also fails, try next model
-                                            print(f"[ImageGen]   Model '{model_id_attempt}' not found with generateImages endpoint, trying next model...")
-                                            last_error = f"404: Model not found in {location}"
-                                            break  # Break out of URL loop, try next model
-                                        else:
-                                            # Try second URL format
-                                            print(f"[ImageGen]   Model '{model_id_attempt}' not found with predict endpoint, trying generateImages...")
-                                            continue  # Try next URL format
+                                elif response.status_code == 401:
+                                    # Authentication error - try next auth method
+                                    error_text = response.text[:500] if response.text else ""
+                                    print(f"[ImageGen] ⚠️ Authentication failed (401) with current method, trying fallback...")
+                                    print(f"[ImageGen] Error: {error_text}")
+                                    
+                                    # If using VEO3_API_KEY and it fails, try other methods
+                                    veo3_api_key = os.getenv('VEO3_API_KEY', '')
+                                    if veo3_api_key and access_token == veo3_api_key:
+                                        print(f"[ImageGen] VEO3_API_KEY failed, trying service account or gcloud...")
+                                        try:
+                                            # Try to get token using other methods (skip VEO3_API_KEY)
+                                            original_veo3_key = os.environ.get('VEO3_API_KEY')
+                                            if original_veo3_key:
+                                                del os.environ['VEO3_API_KEY']  # Temporarily remove
+                                            access_token = await self._get_google_cloud_token()
+                                            if original_veo3_key:
+                                                os.environ['VEO3_API_KEY'] = original_veo3_key  # Restore
+                                            headers["Authorization"] = f"Bearer {access_token}"
+                                            print(f"[ImageGen] ✓ Got new token, retrying request...")
+                                            # Retry the request with new token
+                                            response = await client.post(url, json=payload, headers=headers)
+                                            if response.status_code == 200:
+                                                working_model_id = model_id_attempt
+                                                working_location = location
+                                                break
+                                        except Exception as fallback_error:
+                                            print(f"[ImageGen] Fallback auth also failed: {fallback_error}")
+                                            raise Exception(f"Authentication failed with all methods. Original error: 401 Unauthorized")
                                     else:
-                                        # Different error, might be authentication or other issue
+                                        # Already tried fallback or not using VEO3_API_KEY
                                         response.raise_for_status()
+                                elif response.status_code == 404:
+                                    # Model not found
+                                    error_text = response.text[:500] if response.text else ""
+                                    if url == url2:
+                                        # If second URL format also fails, try next model
+                                        print(f"[ImageGen]   Model '{model_id_attempt}' not found with generateImages endpoint, trying next model...")
+                                        last_error = f"404: Model not found in {location}"
+                                        break  # Break out of URL loop, try next model
+                                    else:
+                                        # Try second URL format
+                                        print(f"[ImageGen]   Model '{model_id_attempt}' not found with predict endpoint, trying generateImages...")
+                                        continue  # Try next URL format
+                                else:
+                                    # Different error
+                                    response.raise_for_status()
                             except httpx.HTTPStatusError as e:
                                 last_error = e
                                 if e.response.status_code == 404:
