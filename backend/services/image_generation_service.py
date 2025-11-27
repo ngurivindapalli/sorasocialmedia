@@ -84,52 +84,133 @@ class ImageGenerationService:
                     "Make sure gcloud is installed and you're authenticated: gcloud auth login"
                 )
         
-        # Priority 3: Service account key file (same as Veo 3)
+        # Priority 3: Service account key file or JSON content (same as Veo 3)
         service_account_key = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '')
-        if service_account_key:
-            if not os.path.exists(service_account_key):
-                raise Exception(
-                    f"Service account key file not found: {service_account_key}. "
-                    "Please check the GOOGLE_APPLICATION_CREDENTIALS path."
-                )
+        # Also check for JSON content in environment variable
+        service_account_json = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON', '')
+        
+        if service_account_key or service_account_json:
+            import json
+            import tempfile
             
-            if GOOGLE_AUTH_AVAILABLE:
+            # Determine if we have a file path or JSON content
+            key_file_path = None
+            is_temp_file = False
+            
+            if service_account_json:
+                # JSON content provided directly
                 try:
-                    credentials = service_account.Credentials.from_service_account_file(
-                        service_account_key,
-                        scopes=['https://www.googleapis.com/auth/cloud-platform']
-                    )
-                    if not credentials.valid:
-                        credentials.refresh(Request())
-                    print("[ImageGen] Using service account for authentication (same as Veo 3)")
-                    return credentials.token
-                except Exception as e:
-                    raise Exception(
-                        f"Failed to authenticate with service account: {str(e)}. "
-                        "Make sure the JSON key file is valid and has the correct permissions."
-                    )
-            else:
-                # Fallback to gcloud CLI if google-auth is not available
-                print("[ImageGen] ⚠️ google-auth not installed, trying gcloud CLI fallback...")
-                try:
-                    result = subprocess.run(
-                        ['gcloud', 'auth', 'activate-service-account', '--key-file', service_account_key],
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    )
-                    result = subprocess.run(
-                        ['gcloud', 'auth', 'print-access-token'],
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    )
-                    return result.stdout.strip()
-                except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                    raise Exception(
-                        f"Service account authentication failed. Install google-auth: pip install google-auth, "
-                        f"or ensure gcloud CLI is available. Error: {str(e)}"
-                    )
+                    # Validate it's JSON
+                    json.loads(service_account_json)
+                    # Write to temp file
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                        f.write(service_account_json)
+                        key_file_path = f.name
+                        is_temp_file = True
+                    print("[ImageGen] Using service account JSON from environment variable")
+                except json.JSONDecodeError:
+                    raise Exception("GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON")
+            elif service_account_key:
+                # Check if it's a file path or JSON content
+                if service_account_key.strip().startswith('{'):
+                    # It's JSON content, not a file path
+                    try:
+                        json.loads(service_account_key)
+                        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                            f.write(service_account_key)
+                            key_file_path = f.name
+                            is_temp_file = True
+                        print("[ImageGen] Using service account JSON from GOOGLE_APPLICATION_CREDENTIALS")
+                    except json.JSONDecodeError:
+                        raise Exception("GOOGLE_APPLICATION_CREDENTIALS contains invalid JSON")
+                elif os.path.exists(service_account_key):
+                    # It's a valid file path
+                    key_file_path = service_account_key
+                    print("[ImageGen] Using service account key file")
+                else:
+                    # File doesn't exist - might be JSON content or invalid path
+                    if service_account_key.strip().startswith('{'):
+                        try:
+                            json.loads(service_account_key)
+                            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                                f.write(service_account_key)
+                                key_file_path = f.name
+                                is_temp_file = True
+                            print("[ImageGen] Using service account JSON from GOOGLE_APPLICATION_CREDENTIALS (file not found, treating as JSON)")
+                        except json.JSONDecodeError:
+                            raise Exception(
+                                f"Service account key file not found: {service_account_key}. "
+                                "If providing JSON content, ensure it's valid JSON."
+                            )
+                    else:
+                        raise Exception(
+                            f"Service account key file not found: {service_account_key}. "
+                            "Please check the GOOGLE_APPLICATION_CREDENTIALS path or provide JSON content."
+                        )
+            
+            if key_file_path:
+                if GOOGLE_AUTH_AVAILABLE:
+                    try:
+                        credentials = service_account.Credentials.from_service_account_file(
+                            key_file_path,
+                            scopes=['https://www.googleapis.com/auth/cloud-platform']
+                        )
+                        if not credentials.valid:
+                            credentials.refresh(Request())
+                        print("[ImageGen] Using service account for authentication (same as Veo 3)")
+                        token = credentials.token
+                        # Clean up temp file if we created one
+                        if is_temp_file:
+                            try:
+                                os.unlink(key_file_path)
+                            except:
+                                pass
+                        return token
+                    except Exception as e:
+                        # Clean up temp file if we created one
+                        if is_temp_file:
+                            try:
+                                os.unlink(key_file_path)
+                            except:
+                                pass
+                        raise Exception(
+                            f"Failed to authenticate with service account: {str(e)}. "
+                            "Make sure the JSON key file is valid and has the correct permissions."
+                        )
+                else:
+                    # Fallback to gcloud CLI if google-auth is not available
+                    print("[ImageGen] ⚠️ google-auth not installed, trying gcloud CLI fallback...")
+                    try:
+                        result = subprocess.run(
+                            ['gcloud', 'auth', 'activate-service-account', '--key-file', key_file_path],
+                            capture_output=True,
+                            text=True,
+                            check=True
+                        )
+                        result = subprocess.run(
+                            ['gcloud', 'auth', 'print-access-token'],
+                            capture_output=True,
+                            text=True,
+                            check=True
+                        )
+                        # Clean up temp file if we created one
+                        if is_temp_file:
+                            try:
+                                os.unlink(key_file_path)
+                            except:
+                                pass
+                        return result.stdout.strip()
+                    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                        # Clean up temp file if we created one
+                        if is_temp_file:
+                            try:
+                                os.unlink(key_file_path)
+                            except:
+                                pass
+                        raise Exception(
+                            f"Service account authentication failed. Install google-auth: pip install google-auth, "
+                            f"or ensure gcloud CLI is available. Error: {str(e)}"
+                        )
         
         # No authentication method found
         raise Exception(
