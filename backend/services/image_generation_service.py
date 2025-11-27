@@ -193,27 +193,9 @@ class ImageGenerationService:
         print(f"[ImageGen] Generating image with Gemini 3 Pro Image via Vertex AI")
         print(f"[ImageGen] Prompt: {prompt[:100]}...")
         
-        # Try authentication methods in order, with fallback on 401 errors
-        access_token = None
-        auth_methods_tried = []
-        
-        # Try VEO3_API_KEY first (if set)
-        veo3_api_key = os.getenv('VEO3_API_KEY', '')
-        if veo3_api_key:
-            try:
-                access_token = veo3_api_key
-                auth_methods_tried.append("VEO3_API_KEY")
-                print(f"[ImageGen] Trying VEO3_API_KEY for authentication...")
-            except Exception as e:
-                print(f"[ImageGen] VEO3_API_KEY failed: {e}")
-        
-        # If VEO3_API_KEY fails with 401, try other methods
-        # We'll test the token by making a request, and if it fails with 401, try next method
-        
         try:
             # Get Google Cloud access token (same method as Veo 3)
-            if not access_token:
-                access_token = await self._get_google_cloud_token()
+            access_token = await self._get_google_cloud_token()
             
             # Convert size to aspect ratio for Gemini 3 Pro Image
             # Supported aspect ratios: 1:1, 3:2, 2:3, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9
