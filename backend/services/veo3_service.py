@@ -36,6 +36,7 @@ class Veo3Service:
         # Authentication - can use API key, service account key, or gcloud CLI
         self.api_key = os.getenv('VEO3_API_KEY', '')  # Direct API key/access token
         self.service_account_key = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '')
+        self.service_account_json = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON', '')  # JSON content from env var
         self.use_gcloud_auth = os.getenv('VEO3_USE_GCLOUD_AUTH', 'false').lower() == 'true'
         
         # Base URL for Vertex AI API
@@ -53,6 +54,8 @@ class Veo3Service:
                 print(f"[Veo3]   Auth: API Key")
             elif self.use_gcloud_auth:
                 print(f"[Veo3]   Auth: gcloud CLI")
+            elif self.service_account_json:
+                print(f"[Veo3]   Auth: Service Account (from GOOGLE_SERVICE_ACCOUNT_JSON)")
             elif self.service_account_key:
                 print(f"[Veo3]   Auth: Service Account")
     
@@ -83,53 +86,127 @@ class Veo3Service:
                     "Failed to get access token from gcloud CLI. "
                     "Make sure gcloud is installed and you're authenticated: gcloud auth login"
                 )
-        elif self.service_account_key:
-            # Use service account key file
-            if not os.path.exists(self.service_account_key):
-                raise Exception(
-                    f"Service account key file not found: {self.service_account_key}. "
-                    "Please check the GOOGLE_APPLICATION_CREDENTIALS path."
-                )
+        elif self.service_account_key or self.service_account_json:
+            # Use service account key file or JSON content
+            import json
+            import tempfile
             
-            if GOOGLE_AUTH_AVAILABLE:
-                # Use google-auth library for proper service account authentication
+            # Determine if we have a file path or JSON content
+            key_file_path = None
+            is_temp_file = False
+            
+            if self.service_account_json:
+                # JSON content provided directly
                 try:
-                    credentials = service_account.Credentials.from_service_account_file(
-                        self.service_account_key,
-                        scopes=['https://www.googleapis.com/auth/cloud-platform']
-                    )
-                    # Refresh the token if needed
-                    if not credentials.valid:
-                        credentials.refresh(Request())
-                    return credentials.token
-                except Exception as e:
-                    raise Exception(
-                        f"Failed to authenticate with service account: {str(e)}. "
-                        "Make sure the JSON key file is valid and has the correct permissions."
-                    )
-            else:
-                # Fallback to gcloud CLI if google-auth is not available
-                print("[Veo3] ⚠️ google-auth not installed, trying gcloud CLI fallback...")
-                try:
-                    result = subprocess.run(
-                        ['gcloud', 'auth', 'activate-service-account', '--key-file', self.service_account_key],
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    )
-                    # Now get the token
-                    result = subprocess.run(
-                        ['gcloud', 'auth', 'print-access-token'],
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    )
-                    return result.stdout.strip()
-                except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                    raise Exception(
-                        f"Service account authentication failed. Install google-auth: pip install google-auth, "
-                        f"or ensure gcloud CLI is available. Error: {str(e)}"
-                    )
+                    # Validate it's JSON
+                    json.loads(self.service_account_json)
+                    # Write to temp file
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                        f.write(self.service_account_json)
+                        key_file_path = f.name
+                        is_temp_file = True
+                    print("[Veo3] Using service account JSON from GOOGLE_SERVICE_ACCOUNT_JSON")
+                except json.JSONDecodeError:
+                    raise Exception("GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON")
+            elif self.service_account_key:
+                # Check if it's JSON content first (before checking file path)
+                service_account_key_stripped = self.service_account_key.strip()
+                if service_account_key_stripped.startswith('{'):
+                    # It's JSON content, not a file path
+                    try:
+                        json.loads(service_account_key_stripped)
+                        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                            f.write(service_account_key_stripped)
+                            key_file_path = f.name
+                            is_temp_file = True
+                        print("[Veo3] Using service account JSON from GOOGLE_APPLICATION_CREDENTIALS")
+                    except json.JSONDecodeError:
+                        raise Exception("GOOGLE_APPLICATION_CREDENTIALS contains invalid JSON")
+                elif os.path.exists(self.service_account_key):
+                    # It's a valid file path
+                    key_file_path = self.service_account_key
+                    print("[Veo3] Using service account key file")
+                else:
+                    # File doesn't exist - check if it might be JSON content
+                    try:
+                        parsed_json = json.loads(service_account_key_stripped)
+                        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                            f.write(service_account_key_stripped)
+                            key_file_path = f.name
+                            is_temp_file = True
+                        print("[Veo3] Using service account JSON from GOOGLE_APPLICATION_CREDENTIALS (file not found, treating as JSON)")
+                    except (json.JSONDecodeError, ValueError):
+                        raise Exception(
+                            f"Service account key file not found: {self.service_account_key}. "
+                            "Please check the GOOGLE_APPLICATION_CREDENTIALS path or provide JSON content. "
+                            "On Render, you can set GOOGLE_SERVICE_ACCOUNT_JSON with the full JSON content instead."
+                        )
+            
+            if key_file_path:
+                if GOOGLE_AUTH_AVAILABLE:
+                    # Use google-auth library for proper service account authentication
+                    try:
+                        credentials = service_account.Credentials.from_service_account_file(
+                            key_file_path,
+                            scopes=['https://www.googleapis.com/auth/cloud-platform']
+                        )
+                        # Refresh the token if needed
+                        if not credentials.valid:
+                            credentials.refresh(Request())
+                        token = credentials.token
+                        # Clean up temp file if we created one
+                        if is_temp_file:
+                            try:
+                                os.unlink(key_file_path)
+                            except:
+                                pass
+                        return token
+                    except Exception as e:
+                        # Clean up temp file if we created one
+                        if is_temp_file:
+                            try:
+                                os.unlink(key_file_path)
+                            except:
+                                pass
+                        raise Exception(
+                            f"Failed to authenticate with service account: {str(e)}. "
+                            "Make sure the JSON key file is valid and has the correct permissions."
+                        )
+                else:
+                    # Fallback to gcloud CLI if google-auth is not available
+                    print("[Veo3] ⚠️ google-auth not installed, trying gcloud CLI fallback...")
+                    try:
+                        result = subprocess.run(
+                            ['gcloud', 'auth', 'activate-service-account', '--key-file', key_file_path],
+                            capture_output=True,
+                            text=True,
+                            check=True
+                        )
+                        # Now get the token
+                        result = subprocess.run(
+                            ['gcloud', 'auth', 'print-access-token'],
+                            capture_output=True,
+                            text=True,
+                            check=True
+                        )
+                        # Clean up temp file if we created one
+                        if is_temp_file:
+                            try:
+                                os.unlink(key_file_path)
+                            except:
+                                pass
+                        return result.stdout.strip()
+                    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                        # Clean up temp file if we created one
+                        if is_temp_file:
+                            try:
+                                os.unlink(key_file_path)
+                            except:
+                                pass
+                        raise Exception(
+                            f"Service account authentication failed. Install google-auth: pip install google-auth, "
+                            f"or ensure gcloud CLI is available. Error: {str(e)}"
+                        )
         else:
             raise Exception(
                 "No authentication method configured. "
