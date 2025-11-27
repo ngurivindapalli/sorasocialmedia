@@ -372,11 +372,51 @@ class ImageGenerationService:
                                         try:
                                             # Try to get token using other methods (skip VEO3_API_KEY)
                                             original_veo3_key = os.environ.get('VEO3_API_KEY')
+                                            original_creds = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+                                            
                                             if original_veo3_key:
                                                 del os.environ['VEO3_API_KEY']  # Temporarily remove
-                                            access_token = await self._get_google_cloud_token()
+                                            
+                                            # Try gcloud CLI first (if enabled)
+                                            use_gcloud_auth = os.getenv('VEO3_USE_GCLOUD_AUTH', 'false').lower() == 'true'
+                                            new_token = None
+                                            
+                                            if use_gcloud_auth:
+                                                try:
+                                                    result = subprocess.run(
+                                                        ['gcloud', 'auth', 'print-access-token'],
+                                                        capture_output=True,
+                                                        text=True,
+                                                        check=True
+                                                    )
+                                                    new_token = result.stdout.strip()
+                                                    print("[ImageGen] ✓ Got token from gcloud CLI")
+                                                except Exception as gcloud_error:
+                                                    print(f"[ImageGen] gcloud CLI failed: {gcloud_error}")
+                                            
+                                            # If gcloud didn't work, try service account
+                                            if not new_token:
+                                                # Check if we have JSON content in GOOGLE_SERVICE_ACCOUNT_JSON
+                                                service_account_json = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON', '')
+                                                if service_account_json:
+                                                    print("[ImageGen] Using GOOGLE_SERVICE_ACCOUNT_JSON for fallback auth")
+                                                    # Temporarily set GOOGLE_APPLICATION_CREDENTIALS to JSON content
+                                                    if original_creds:
+                                                        del os.environ['GOOGLE_APPLICATION_CREDENTIALS']
+                                                    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = service_account_json
+                                                
+                                                new_token = await self._get_google_cloud_token()
+                                                
+                                                # Restore original GOOGLE_APPLICATION_CREDENTIALS
+                                                if original_creds:
+                                                    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = original_creds
+                                                elif 'GOOGLE_APPLICATION_CREDENTIALS' in os.environ and service_account_json:
+                                                    del os.environ['GOOGLE_APPLICATION_CREDENTIALS']
+                                            
                                             if original_veo3_key:
                                                 os.environ['VEO3_API_KEY'] = original_veo3_key  # Restore
+                                            
+                                            access_token = new_token
                                             headers["Authorization"] = f"Bearer {access_token}"
                                             print(f"[ImageGen] ✓ Got new token, retrying request...")
                                             # Retry the request with new token
@@ -385,9 +425,19 @@ class ImageGenerationService:
                                                 working_model_id = model_id_attempt
                                                 working_location = location
                                                 break
+                                            elif response.status_code == 401:
+                                                raise Exception("All authentication methods failed. Please check your service account JSON or gcloud setup.")
                                         except Exception as fallback_error:
                                             print(f"[ImageGen] Fallback auth also failed: {fallback_error}")
-                                            raise Exception(f"Authentication failed with all methods. Original error: 401 Unauthorized")
+                                            error_msg = f"Authentication failed with all methods.\n"
+                                            error_msg += f"Original error: 401 Unauthorized\n"
+                                            error_msg += f"Fallback error: {str(fallback_error)}\n\n"
+                                            error_msg += f"💡 Solutions:\n"
+                                            error_msg += f"1. Set GOOGLE_SERVICE_ACCOUNT_JSON in Render with your full service account JSON content\n"
+                                            error_msg += f"2. Or remove GOOGLE_APPLICATION_CREDENTIALS (it has invalid Windows path)\n"
+                                            error_msg += f"3. Or set VEO3_USE_GCLOUD_AUTH=true if gcloud is available\n"
+                                            error_msg += f"4. Or update VEO3_API_KEY with a fresh access token"
+                                            raise Exception(error_msg)
                                     else:
                                         # Already tried fallback or not using VEO3_API_KEY
                                         response.raise_for_status()
