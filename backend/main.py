@@ -2217,19 +2217,54 @@ async def create_informational_video(request: InformationalVideoRequest):
         print(f"[API] Creating informational video for Instagram profile: @{request.username}")
         print(f"[API] Target duration: {request.target_duration} seconds")
         
-        # Step 1: Scrape Instagram profile to learn context
+        # Step 1: Scrape Instagram profile to learn context (with graceful fallback)
         print(f"[API] 📱 Scraping Instagram profile to learn context...")
-        profile_context = await instagram_service.get_profile_context(request.username)
+        profile_context = {}
+        try:
+            profile_context = await instagram_service.get_profile_context(request.username)
+        except Exception as profile_error:
+            print(f"[API] ⚠️ Could not scrape Instagram profile: {profile_error}")
+            print(f"[API] Continuing with AI-generated context based on username...")
+            # Create minimal profile context from username
+            profile_context = {
+                "username": request.username,
+                "full_name": "",
+                "biography": "",
+                "external_url": "",
+                "is_business_account": False,
+                "business_category": "",
+                "followers": 0,
+                "following": 0,
+                "posts_count": 0,
+                "is_verified": False,
+                "profile_pic_url": ""
+            }
         
+        # If profile context is empty or missing username, use fallback
         if not profile_context or not profile_context.get('username'):
-            raise HTTPException(
-                status_code=404,
-                detail=f"Instagram profile @{request.username} not found or could not be accessed"
-            )
+            print(f"[API] ⚠️ Profile context unavailable, using username-based context generation...")
+            profile_context = {
+                "username": request.username,
+                "full_name": "",
+                "biography": "",
+                "external_url": "",
+                "is_business_account": False,
+                "business_category": "",
+                "followers": 0,
+                "following": 0,
+                "posts_count": 0,
+                "is_verified": False,
+                "profile_pic_url": ""
+            }
         
-        # Step 2: Research profile context using AI
+        # Step 2: Research profile context using AI (works even with minimal context)
         print(f"[API] 🤖 Analyzing profile context with AI...")
         page_context_summary = await openai_service.research_profile_context(profile_context)
+        
+        # If AI research also fails, use username as fallback
+        if not page_context_summary or len(page_context_summary.strip()) < 10:
+            print(f"[API] ⚠️ AI research failed, using username-based context...")
+            page_context_summary = f"Content for {request.username} - informational and educational style"
         
         print(f"[API] Profile context learned: {page_context_summary[:200]}...")
         
