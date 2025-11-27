@@ -573,6 +573,12 @@ In the full_prompt field, start with "Create a {target_duration}-second video...
         Generate a video using Sora API (OpenAI Video Generation)
         Returns job info with status and ID for polling
         
+        Available models:
+        - "sora-2" (default): Fast model for quick results
+        - "sora-2-pro": Higher quality model for professional results
+        - "sora-4" or newer: Use if available in your OpenAI account
+        
+        To use a different model, pass it in the model parameter.
         API Docs: https://platform.openai.com/docs/guides/video-generation
         """
         try:

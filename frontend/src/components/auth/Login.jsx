@@ -10,7 +10,7 @@ function Login() {
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
     setLoading(true)
@@ -21,15 +21,23 @@ function Login() {
       return
     }
 
-    const result = authUtils.login(username.trim(), password)
+    try {
+    const result = await authUtils.login(username.trim(), password)
     
     if (result.success) {
-      navigate('/dashboard')
+        // Small delay to ensure token is saved
+        setTimeout(() => {
+          navigate('/dashboard', { replace: true })
+        }, 100)
     } else {
-      setError(result.error)
+        setError(result.error || 'Invalid username or password')
+        setLoading(false)
     }
-    
+    } catch (err) {
+      console.error('Login error:', err)
+      setError('An unexpected error occurred. Please try again.')
     setLoading(false)
+    }
   }
 
   return (

@@ -1,62 +1,63 @@
-#!/usr/bin/env pwsh
-# Start both backend and frontend servers
+# VideoHook - Start Both Servers
+# This script starts both the backend and frontend servers
 
-Write-Host "Starting X Video Hook Generator..." -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "  VideoHook - Starting Servers" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Start Backend
+$rootPath = $PSScriptRoot
+$backendPath = Join-Path $rootPath "backend"
+$frontendPath = Join-Path $rootPath "frontend"
+
+# Check if directories exist
+if (-not (Test-Path $backendPath)) {
+    Write-Host "ERROR: Backend directory not found: $backendPath" -ForegroundColor Red
+    exit 1
+}
+
+if (-not (Test-Path $frontendPath)) {
+    Write-Host "ERROR: Frontend directory not found: $frontendPath" -ForegroundColor Red
+    exit 1
+}
+
 Write-Host "Starting Backend Server..." -ForegroundColor Yellow
-$backendJob = Start-Job -ScriptBlock {
-    Set-Location $using:PWD\backend
-    .\venv\Scripts\Activate.ps1
-    python main.py
-}
-
-# Wait a bit for backend to start
-Start-Sleep -Seconds 3
-
-# Start Frontend
-Write-Host "Starting Frontend Server..." -ForegroundColor Green
-$frontendJob = Start-Job -ScriptBlock {
-    Set-Location $using:PWD\frontend
-    npm run dev
-}
-
-Write-Host ""
-Write-Host "Both servers are starting!" -ForegroundColor Green
-Write-Host ""
-Write-Host "Backend:  http://localhost:8000" -ForegroundColor Cyan
-Write-Host "Frontend: http://localhost:3000" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "Press Ctrl+C to stop all servers" -ForegroundColor Yellow
+Write-Host "   Location: $backendPath" -ForegroundColor Gray
+Write-Host "   URL: http://localhost:8000" -ForegroundColor Gray
 Write-Host ""
 
-# Monitor jobs and display output
-try {
-    while ($true) {
-        $backendOutput = Receive-Job -Job $backendJob
-        $frontendOutput = Receive-Job -Job $frontendJob
-        
-        if ($backendOutput) {
-            Write-Host "[BACKEND] $backendOutput" -ForegroundColor Blue
-        }
-        if ($frontendOutput) {
-            Write-Host "[FRONTEND] $frontendOutput" -ForegroundColor Magenta
-        }
-        
-        # Check if jobs are still running
-        if ($backendJob.State -ne 'Running' -and $frontendJob.State -ne 'Running') {
-            break
-        }
-        
-        Start-Sleep -Milliseconds 100
-    }
-}
-finally {
-    # Clean up jobs on exit
-    Write-Host ""
-    Write-Host "Stopping servers..." -ForegroundColor Red
-    Stop-Job -Job $backendJob, $frontendJob -ErrorAction SilentlyContinue
-    Remove-Job -Job $backendJob, $frontendJob -Force -ErrorAction SilentlyContinue
-    Write-Host "Servers stopped" -ForegroundColor Green
-}
+# Start Backend in a new window
+$backendCommand = "cd '$backendPath'; if (Test-Path 'venv\Scripts\Activate.ps1') { .\venv\Scripts\Activate.ps1; Write-Host '[Backend] Virtual environment activated' -ForegroundColor Green } else { Write-Host '[Backend] No venv found, using system Python' -ForegroundColor Yellow }; Write-Host ''; Write-Host '========================================' -ForegroundColor Cyan; Write-Host '  BACKEND SERVER (FastAPI)' -ForegroundColor Cyan; Write-Host '========================================' -ForegroundColor Cyan; Write-Host 'Starting on http://localhost:8000' -ForegroundColor Green; Write-Host 'API Docs: http://localhost:8000/docs' -ForegroundColor Yellow; Write-Host ''; python main.py"
+
+Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCommand -WindowStyle Normal
+
+# Wait a moment for backend to start
+Start-Sleep -Seconds 2
+
+Write-Host "Starting Frontend Server..." -ForegroundColor Yellow
+Write-Host "   Location: $frontendPath" -ForegroundColor Gray
+Write-Host "   URL: http://localhost:3001" -ForegroundColor Gray
+Write-Host ""
+
+# Start Frontend in a new window
+$frontendCommand = "cd '$frontendPath'; Write-Host ''; Write-Host '========================================' -ForegroundColor Cyan; Write-Host '  FRONTEND SERVER (Vite/React)' -ForegroundColor Cyan; Write-Host '========================================' -ForegroundColor Cyan; Write-Host 'Starting on http://localhost:3001' -ForegroundColor Green; Write-Host ''; npm run dev"
+
+Start-Process powershell -ArgumentList "-NoExit", "-Command", $frontendCommand -WindowStyle Normal
+
+Write-Host ""
+Write-Host "SUCCESS: Both servers are starting!" -ForegroundColor Green
+Write-Host ""
+Write-Host "Server Information:" -ForegroundColor Cyan
+Write-Host "   Backend:  http://localhost:8000" -ForegroundColor White
+Write-Host "   Frontend: http://localhost:3001" -ForegroundColor White
+Write-Host "   API Docs: http://localhost:8000/docs" -ForegroundColor White
+Write-Host ""
+Write-Host "Two PowerShell windows have opened:" -ForegroundColor Yellow
+Write-Host "   1. Backend server (FastAPI)" -ForegroundColor Gray
+Write-Host "   2. Frontend server (Vite/React)" -ForegroundColor Gray
+Write-Host ""
+Write-Host "Wait a few seconds for servers to fully start," -ForegroundColor Yellow
+Write-Host "then open http://localhost:3001 in your browser" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "Press any key to exit this window (servers will keep running)..." -ForegroundColor Gray
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")

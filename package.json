@@ -1,14 +1,14 @@
 {
-  "name": "x-video-hook-generator",
+  "name": "videohook-root",
   "version": "1.0.0",
-  "description": "AI-powered X video hook generator",
+  "description": "VideoHook - Social Media Video Generation Platform",
   "scripts": {
     "start": "powershell -ExecutionPolicy Bypass -File ./start.ps1",
-    "backend": "cd backend && .\\venv\\Scripts\\Activate.ps1 && python main.py",
-    "frontend": "cd frontend && npm run dev",
-    "install-all": "cd backend && pip install -r requirements.txt && cd ../frontend && npm install"
+    "start:backend": "cd backend && if (Test-Path venv\\Scripts\\Activate.ps1) { .\\venv\\Scripts\\Activate.ps1 }; python main.py",
+    "start:frontend": "cd frontend && npm run dev",
+    "dev": "powershell -ExecutionPolicy Bypass -File ./start.ps1"
   },
-  "keywords": ["openai", "x-api", "hooks", "video-analysis"],
+  "keywords": ["video", "generation", "ai", "social-media"],
   "author": "",
   "license": "MIT"
 }

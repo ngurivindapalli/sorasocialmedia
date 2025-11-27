@@ -5,13 +5,14 @@ import Logo from '../Logo'
 
 function Signup() {
   const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
     setLoading(true)
@@ -19,6 +20,12 @@ function Signup() {
     // Validation
     if (!username.trim()) {
       setError('Username is required')
+      setLoading(false)
+      return
+    }
+
+    if (!email.trim() || !email.includes('@')) {
+      setError('Valid email is required')
       setLoading(false)
       return
     }
@@ -36,17 +43,20 @@ function Signup() {
     }
 
     // Sign up
-    const result = authUtils.signup(username.trim(), password)
-    
-    if (result.success) {
-      // Auto login after signup
-      authUtils.login(username.trim(), password)
-      navigate('/dashboard')
-    } else {
-      setError(result.error)
+    try {
+      const result = await authUtils.signup(username.trim(), email.trim(), password)
+      
+      if (result.success) {
+        navigate('/dashboard')
+      } else {
+        setError(result.error || 'Failed to create account. Please try again.')
+      }
+    } catch (err) {
+      console.error('Signup error:', err)
+      setError('An unexpected error occurred. Please try again.')
+    } finally {
+      setLoading(false)
     }
-    
-    setLoading(false)
   }
 
   return (
@@ -77,6 +87,21 @@ function Signup() {
                 className="w-full px-4 py-3 border border-[#e5e7eb] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#111827] focus:border-transparent"
                 style={{ fontSize: '16px' }}
                 placeholder="Enter your username"
+                disabled={loading}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-[#111827] mb-2" style={{ fontSize: '14px', fontWeight: 500 }}>
+                Email
+              </label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full px-4 py-3 border border-[#e5e7eb] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#111827] focus:border-transparent"
+                style={{ fontSize: '16px' }}
+                placeholder="Enter your email"
                 disabled={loading}
               />
             </div>

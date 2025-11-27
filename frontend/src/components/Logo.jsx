@@ -3,8 +3,11 @@ import { useNavigate } from 'react-router-dom'
 function Logo() {
   const navigate = useNavigate()
 
-  const handleClick = () => {
-    navigate('/')
+  const handleClick = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    // Navigate to dashboard instead of root
+    navigate('/dashboard')
   }
 
   return (

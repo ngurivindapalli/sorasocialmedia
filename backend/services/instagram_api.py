@@ -3,11 +3,35 @@ import os
 from typing import List, Dict, Optional
 import requests
 
+# Try to import Graph API service
+try:
+    from services.instagram_graph_api import InstagramGraphAPIService
+    GRAPH_API_AVAILABLE = True
+except ImportError:
+    GRAPH_API_AVAILABLE = False
+    print("[IG] Graph API service not available")
+
 
 class InstagramAPIService:
-    """Service for fetching Instagram videos using instaloader with anti-blocking measures"""
+    """Service for fetching Instagram videos - uses Graph API if available, falls back to scraping"""
     
     def __init__(self):
+        # Check if Graph API should be used
+        self.use_graph_api = os.getenv('INSTAGRAM_ACCESS_TOKEN', '') != ''
+        
+        if self.use_graph_api and GRAPH_API_AVAILABLE:
+            print("[IG] Using Instagram Graph API (official API - no blocking!)")
+            self.graph_api = InstagramGraphAPIService()
+            # Initialize scraper as fallback (but don't use it unless Graph API fails)
+            self._init_scraper()
+        else:
+            print("[IG] Using Instagram scraping (instaloader)")
+            if self.use_graph_api and not GRAPH_API_AVAILABLE:
+                print("[IG] ⚠️ Graph API token found but service unavailable. Using scraping instead.")
+            self.graph_api = None
+            self._init_scraper()
+    
+    def _init_scraper(self):
         # Configure instaloader with better user agent and rate limiting
         self.loader = instaloader.Instaloader(
             download_videos=False,
@@ -41,24 +65,45 @@ class InstagramAPIService:
         ig_username = os.getenv('INSTAGRAM_USERNAME')
         ig_password = os.getenv('INSTAGRAM_PASSWORD')
         
+        # Strip quotes if present (handles passwords with # characters)
+        if ig_username:
+            ig_username = ig_username.strip().strip('"').strip("'")
+        if ig_password:
+            ig_password = ig_password.strip().strip('"').strip("'")
+        
+        # Store credentials for retry if needed
+        self.ig_username = ig_username
+        self.ig_password = ig_password
+        
         if ig_username and ig_password:
+            print(f"[IG] Found credentials: username={ig_username}, password_length={len(ig_password)}")
             try:
                 print(f"[IG] Attempting login as @{ig_username}...")
                 self.loader.login(ig_username, ig_password)
                 print(f"[IG] ✓ Successfully logged in as @{ig_username}")
                 self.logged_in = True
             except Exception as login_error:
-                print(f"[IG] ⚠️ Login failed: {login_error}. Continuing without authentication.")
+                print(f"[IG] ⚠️ Login failed: {login_error}")
+                print(f"[IG] Continuing without authentication. This may cause rate limiting.")
                 self.logged_in = False
         else:
-            print("[IG] No Instagram credentials provided. Running without authentication (may be rate-limited).")
-            print("[IG] Tip: Set INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD environment variables to avoid blocking.")
+            if not ig_username:
+                print("[IG] ⚠️ INSTAGRAM_USERNAME not set in .env file")
+            if not ig_password:
+                print("[IG] ⚠️ INSTAGRAM_PASSWORD not set in .env file")
+            print("[IG] Running without authentication (may be rate-limited).")
+            print("[IG] Tip: Set INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD in backend/.env to avoid blocking.")
             self.logged_in = False
         
         print("[IG] Initialized with browser-like headers to avoid blocking")
     
     async def get_profile_context(self, username: str) -> Dict:
-        """Extract profile context including bio, business info, and category"""
+        """Extract profile context - uses Graph API if available, otherwise scraping"""
+        # Use Graph API if available
+        if self.use_graph_api and self.graph_api:
+            return await self.graph_api.get_profile_context(username)
+        
+        # Fallback to scraping
         try:
             print(f"[IG] Extracting profile context for: {username}")
             
@@ -103,7 +148,17 @@ class InstagramAPIService:
             }
     
     async def get_user_videos(self, username: str, limit: int = 1) -> List[Dict]:
-        """Fetch videos from Instagram profile with anti-blocking measures"""
+        """Fetch videos from Instagram profile - uses Graph API if available, otherwise scraping"""
+        # Use Graph API if available
+        if self.use_graph_api and self.graph_api:
+            try:
+                return await self.graph_api.get_user_videos(username, limit)
+            except Exception as e:
+                print(f"[IG] Graph API failed: {str(e)}")
+                print(f"[IG] Falling back to scraping...")
+                # Fall through to scraping
+        
+        # Fallback to scraping
         videos = []
         
         try:
@@ -218,11 +273,28 @@ class InstagramAPIService:
             raise Exception(f"Profile '@{username}' is private. Cannot access without login.")
         except instaloader.exceptions.ConnectionException as e:
             error_msg = str(e)
-            if "401" in error_msg or "429" in error_msg:
+            if "401" in error_msg:
+                # 401 = Unauthorized - try to re-login if credentials are available
+                if self.ig_username and self.ig_password and not self.logged_in:
+                    print(f"[IG] Got 401 error, attempting to re-login...")
+                    try:
+                        self.loader.login(self.ig_username, self.ig_password)
+                        print(f"[IG] ✓ Re-login successful")
+                        self.logged_in = True
+                        # Retry the request
+                        return await self.get_user_videos(username, limit)
+                    except Exception as relogin_error:
+                        print(f"[IG] ⚠️ Re-login failed: {relogin_error}")
+                
+                if self.logged_in:
+                    raise Exception(f"Instagram authentication failed even after login. Your credentials may be incorrect or your account may need verification. Error: {error_msg}")
+                else:
+                    raise Exception(f"⚠️ Instagram blocked the request (401 Unauthorized).\n\n🔧 Solutions:\n1. Add Instagram login credentials to backend/.env:\n   INSTAGRAM_USERNAME=your_username\n   INSTAGRAM_PASSWORD=\"your_password\" (use quotes if password has #)\n2. Verify your credentials are correct\n3. Try a different Instagram account\n4. Wait 10-15 minutes (rate limiting)\n\nAuthenticated requests are much less likely to be blocked!")
+            elif "429" in error_msg:
                 if self.logged_in:
                     raise Exception(f"Instagram rate limit reached even with authentication. Please wait 10-15 minutes and try again.")
                 else:
-                    raise Exception(f"⚠️ Instagram blocked the request - this is common for cloud servers.\n\n🔧 Solutions:\n1. Add Instagram login credentials to Render:\n   - INSTAGRAM_USERNAME=your_username\n   - INSTAGRAM_PASSWORD=your_password\n2. Try a different Instagram account\n3. Wait 10-15 minutes (rate limiting)\n\nAuthenticated requests are much less likely to be blocked!")
+                    raise Exception(f"⚠️ Instagram rate limit reached (429).\n\n🔧 Solutions:\n1. Add Instagram login credentials to backend/.env to reduce rate limiting\n2. Wait 10-15 minutes before trying again\n3. Try a different Instagram account")
             raise Exception(f"Instagram connection error: {str(e)}")
         except Exception as e:
             print(f"[IG] Unexpected error: {str(e)}")
@@ -232,6 +304,11 @@ class InstagramAPIService:
     
     async def download_video(self, video_url: str, video_id: str) -> str:
         """Download Instagram video to temporary file"""
+        # Use Graph API if available
+        if self.use_graph_api and self.graph_api:
+            return await self.graph_api.download_video(video_url, video_id)
+        
+        # Fallback to scraping method
         os.makedirs("temp", exist_ok=True)
         file_path = f"temp/ig_{video_id}.mp4"
         

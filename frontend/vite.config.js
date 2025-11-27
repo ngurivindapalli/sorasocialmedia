@@ -19,6 +19,19 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
+        secure: false,
+        ws: true, // Enable WebSocket proxying if needed
+        configure: (proxy, _options) => {
+          proxy.on('error', (err, req, _res) => {
+            console.log('Proxy error:', err.message, 'for', req.url);
+          });
+          proxy.on('proxyReq', (proxyReq, req, _res) => {
+            console.log('Proxying:', req.method, req.url, '→', 'http://localhost:8000' + req.url);
+          });
+          proxy.on('proxyRes', (proxyRes, req, _res) => {
+            console.log('Proxy response:', proxyRes.statusCode, 'for', req.method, req.url);
+          });
+        },
       }
     }
   }
