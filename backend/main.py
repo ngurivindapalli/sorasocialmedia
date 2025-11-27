@@ -170,8 +170,8 @@ async def root():
             "structured_outputs": "✓ Active" if openai_service else "⚠ Disabled",
             "vision_api": "✓ Active" if openai_service else "⚠ Disabled",
             "veo3": "✓ Active" if veo3_service.project_id else "⚠ Disabled - GOOGLE_CLOUD_PROJECT_ID not set",
-            "image_generation": "✓ Active" if (image_generation_service.nanobanana_api_key or image_generation_service.openai_api_key) else "⚠ Disabled - NANOBANANA_API_KEY or OPENAI_API_KEY not set",
-            "nanobanana": "✓ Active" if image_generation_service.nanobanana_api_key else "⚠ Disabled - NANOBANANA_API_KEY not set (superior text rendering)",
+            "image_generation": "✓ Active" if image_generation_service.project_id else "⚠ Disabled - GOOGLE_CLOUD_PROJECT_ID not set",
+            "gemini_3_pro_image": "✓ Active" if image_generation_service.project_id else "⚠ Disabled - GOOGLE_CLOUD_PROJECT_ID not set (uses Vertex AI)",
             "smart_composition": "✓ Active" if video_composition_service.openai_client else "⚠ Disabled",
         },
         "model": openai_service.model if openai_service else "Not configured"
@@ -2380,7 +2380,7 @@ Return a JSON object with:
         if not image_urls:
             raise HTTPException(
                 status_code=500,
-                detail="Failed to generate any images. Check NANOBANANA_API_KEY configuration."
+                detail="Failed to generate any images. Check GOOGLE_CLOUD_PROJECT_ID configuration. Image generation uses Gemini 3 Pro Image via Vertex AI (same as Veo 3)."
             )
         
         print(f"[API] ✓ Generated {len(image_urls)} images successfully")
