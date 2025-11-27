@@ -55,25 +55,44 @@ class ImageGenerationService:
     async def _get_google_cloud_token(self) -> str:
         """
         Get Google Cloud access token for Gemini 3 Pro Image (same method as Veo 3)
-        Uses GOOGLE_APPLICATION_CREDENTIALS or gcloud CLI
+        Uses the same authentication priority as Veo 3:
+        1. VEO3_API_KEY (direct access token)
+        2. VEO3_USE_GCLOUD_AUTH (gcloud CLI)
+        3. GOOGLE_APPLICATION_CREDENTIALS (service account)
         """
-        # Check for service account key file
+        # Priority 1: Direct API key/access token (same as Veo 3)
+        veo3_api_key = os.getenv('VEO3_API_KEY', '')
+        if veo3_api_key:
+            print("[ImageGen] Using VEO3_API_KEY for authentication (same as Veo 3)")
+            return veo3_api_key
+        
+        # Priority 2: gcloud CLI authentication (same as Veo 3)
+        use_gcloud_auth = os.getenv('VEO3_USE_GCLOUD_AUTH', 'false').lower() == 'true'
+        if use_gcloud_auth:
+            try:
+                result = subprocess.run(
+                    ['gcloud', 'auth', 'print-access-token'],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                print("[ImageGen] Using gcloud CLI for authentication (same as Veo 3)")
+                return result.stdout.strip()
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                raise Exception(
+                    "Failed to get access token from gcloud CLI. "
+                    "Make sure gcloud is installed and you're authenticated: gcloud auth login"
+                )
+        
+        # Priority 3: Service account key file (same as Veo 3)
         service_account_key = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '')
-        
-        # Try gcloud CLI first (simpler)
-        try:
-            result = subprocess.run(
-                ['gcloud', 'auth', 'print-access-token'],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            return result.stdout.strip()
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            pass
-        
-        # Try service account key file
-        if service_account_key and os.path.exists(service_account_key):
+        if service_account_key:
+            if not os.path.exists(service_account_key):
+                raise Exception(
+                    f"Service account key file not found: {service_account_key}. "
+                    "Please check the GOOGLE_APPLICATION_CREDENTIALS path."
+                )
+            
             if GOOGLE_AUTH_AVAILABLE:
                 try:
                     credentials = service_account.Credentials.from_service_account_file(
@@ -82,13 +101,44 @@ class ImageGenerationService:
                     )
                     if not credentials.valid:
                         credentials.refresh(Request())
+                    print("[ImageGen] Using service account for authentication (same as Veo 3)")
                     return credentials.token
                 except Exception as e:
-                    print(f"[ImageGen] Service account auth error: {e}")
+                    raise Exception(
+                        f"Failed to authenticate with service account: {str(e)}. "
+                        "Make sure the JSON key file is valid and has the correct permissions."
+                    )
             else:
-                print("[ImageGen] ⚠️ google-auth library not available. Install with: pip install google-auth")
+                # Fallback to gcloud CLI if google-auth is not available
+                print("[ImageGen] ⚠️ google-auth not installed, trying gcloud CLI fallback...")
+                try:
+                    result = subprocess.run(
+                        ['gcloud', 'auth', 'activate-service-account', '--key-file', service_account_key],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    result = subprocess.run(
+                        ['gcloud', 'auth', 'print-access-token'],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    return result.stdout.strip()
+                except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                    raise Exception(
+                        f"Service account authentication failed. Install google-auth: pip install google-auth, "
+                        f"or ensure gcloud CLI is available. Error: {str(e)}"
+                    )
         
-        raise Exception("Failed to get Google Cloud access token. Check GOOGLE_APPLICATION_CREDENTIALS or run 'gcloud auth login'")
+        # No authentication method found
+        raise Exception(
+            "No authentication method configured for image generation. "
+            "Set VEO3_API_KEY with your access token, "
+            "or set VEO3_USE_GCLOUD_AUTH=true and run 'gcloud auth login', "
+            "or set GOOGLE_APPLICATION_CREDENTIALS to a service account key file. "
+            "(Uses same authentication as Veo 3)"
+        )
     
     async def generate_image(
         self,
