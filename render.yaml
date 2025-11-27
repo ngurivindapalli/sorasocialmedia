@@ -11,12 +11,11 @@ services:
         sync: false
   
   # Frontend Static Site (Vite)
-  - type: static
-    name: sorasocialmedia-frontend
-    rootDir: frontend
-    buildCommand: npm install && npm run build
-    staticPublishPath: dist
-    envVars:
-      - key: VITE_API_URL
-        sync: false
-        # Set this to your backend URL (e.g., https://sorasocialmedia-backend.onrender.com)
+  # Note: Static sites cannot be defined in render.yaml blueprints
+  # Deploy the frontend manually as a Static Site in Render dashboard:
+  # 1. Go to Dashboard > New > Static Site
+  # 2. Connect your GitHub repo
+  # 3. Root Directory: frontend
+  # 4. Build Command: npm install && npm run build
+  # 5. Publish Directory: dist
+  # 6. Add environment variable: VITE_API_URL = https://sorasocialmedia-backend.onrender.com
