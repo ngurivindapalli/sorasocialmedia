@@ -111,13 +111,14 @@ class ImageGenerationService:
                 except json.JSONDecodeError:
                     raise Exception("GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON")
             elif service_account_key:
-                # Check if it's a file path or JSON content
-                if service_account_key.strip().startswith('{'):
+                # Check if it's JSON content first (before checking file path)
+                service_account_key_stripped = service_account_key.strip()
+                if service_account_key_stripped.startswith('{'):
                     # It's JSON content, not a file path
                     try:
-                        json.loads(service_account_key)
+                        json.loads(service_account_key_stripped)
                         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                            f.write(service_account_key)
+                            f.write(service_account_key_stripped)
                             key_file_path = f.name
                             is_temp_file = True
                         print("[ImageGen] Using service account JSON from GOOGLE_APPLICATION_CREDENTIALS")
@@ -128,24 +129,23 @@ class ImageGenerationService:
                     key_file_path = service_account_key
                     print("[ImageGen] Using service account key file")
                 else:
-                    # File doesn't exist - might be JSON content or invalid path
-                    if service_account_key.strip().startswith('{'):
-                        try:
-                            json.loads(service_account_key)
-                            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                                f.write(service_account_key)
-                                key_file_path = f.name
-                                is_temp_file = True
-                            print("[ImageGen] Using service account JSON from GOOGLE_APPLICATION_CREDENTIALS (file not found, treating as JSON)")
-                        except json.JSONDecodeError:
-                            raise Exception(
-                                f"Service account key file not found: {service_account_key}. "
-                                "If providing JSON content, ensure it's valid JSON."
-                            )
-                    else:
+                    # File doesn't exist - check if it might be JSON content (even if it doesn't start with {)
+                    # This handles cases where JSON might have whitespace or be in a different format
+                    try:
+                        # Try to parse as JSON
+                        parsed_json = json.loads(service_account_key_stripped)
+                        # If it parses successfully, treat it as JSON
+                        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                            f.write(service_account_key_stripped)
+                            key_file_path = f.name
+                            is_temp_file = True
+                        print("[ImageGen] Using service account JSON from GOOGLE_APPLICATION_CREDENTIALS (file not found, treating as JSON)")
+                    except (json.JSONDecodeError, ValueError):
+                        # Not JSON and file doesn't exist
                         raise Exception(
                             f"Service account key file not found: {service_account_key}. "
-                            "Please check the GOOGLE_APPLICATION_CREDENTIALS path or provide JSON content."
+                            "Please check the GOOGLE_APPLICATION_CREDENTIALS path or provide JSON content. "
+                            "On Render, you can set GOOGLE_SERVICE_ACCOUNT_JSON with the full JSON content instead."
                         )
             
             if key_file_path:
