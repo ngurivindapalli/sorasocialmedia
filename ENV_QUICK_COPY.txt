@@ -1,0 +1,45 @@
+============================================
+QUICK COPY-PASTE FOR .env FILE
+============================================
+
+Copy everything below into backend/.env:
+
+OPENAI_API_KEY=sk-your-openai-api-key-here
+HYPERSPELL_API_KEY=your-hyperspell-api-key-here
+JWT_SECRET_KEY=your-random-secret-key-min-32-chars-change-this
+GOOGLE_APPLICATION_CREDENTIALS=./gcp-credentials.json
+
+============================================
+FOR RENDER.COM (Backend) - Add these one by one:
+============================================
+
+Variable: OPENAI_API_KEY
+Value: sk-your-openai-api-key-here
+
+Variable: HYPERSPELL_API_KEY
+Value: your-hyperspell-api-key-here
+
+Variable: GOOGLE_SERVICE_ACCOUNT_JSON
+Value: {"type":"service_account","project_id":"...","private_key":"..."}
+(PASTE YOUR ENTIRE GCP JSON ON ONE LINE - NO LINE BREAKS)
+
+Variable: JWT_SECRET_KEY
+Value: your-random-secret-key-min-32-chars-change-this
+
+============================================
+FOR VERCEL (Frontend) - Add this:
+============================================
+
+Variable: VITE_API_URL
+Value: https://your-backend.onrender.com
+(Replace with your actual Render backend URL)
+
+============================================
+OPTIONAL - Add if needed:
+============================================
+
+ANTHROPIC_API_KEY=sk-ant-your-anthropic-key-here
+DATABASE_URL=sqlite:///./videohook.db
+GOOGLE_CLOUD_PROJECT_ID=aimarketing-480803
+VEO3_LOCATION=us-central1
+

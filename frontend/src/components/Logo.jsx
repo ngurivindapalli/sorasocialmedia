@@ -6,8 +6,8 @@ function Logo() {
   const handleClick = (e) => {
     e.preventDefault()
     e.stopPropagation()
-    // Navigate to dashboard instead of root
-    navigate('/dashboard')
+    // Navigate to landing page
+    navigate('/landing')
   }
 
   return (

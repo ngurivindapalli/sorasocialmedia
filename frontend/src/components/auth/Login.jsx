@@ -47,8 +47,10 @@ function Login() {
         // Save email if remember me is checked
         if (rememberMe) {
           localStorage.setItem('videohook_saved_email', email.trim())
+          localStorage.setItem('videohook_remember_me', 'true')
         } else {
           localStorage.removeItem('videohook_saved_email')
+          localStorage.removeItem('videohook_remember_me')
         }
         
         // Small delay to ensure token is saved

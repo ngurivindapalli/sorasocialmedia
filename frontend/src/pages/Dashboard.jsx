@@ -133,8 +133,8 @@ function Dashboard() {
           height: '64px',
         }}
       >
-        <div className="h-full flex items-center justify-between w-full" style={{ paddingLeft: '60px', paddingRight: '100px' }}>
-          <div className="flex items-center" style={{ gap: '8px' }}>
+        <div className="h-full flex items-center justify-between w-full" style={{ paddingLeft: '24px', paddingRight: '24px' }}>
+          <div className="flex items-center" style={{ gap: '12px' }}>
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
               className="rounded-lg hover:bg-[#f5f5f5] transition-all flex items-center justify-center text-[#111827]"
@@ -147,23 +147,42 @@ function Dashboard() {
             >
               {sidebarOpen ? <XIcon className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
-            <div className="text-[#111827] flex items-center">
+            <div className="text-[#111827] flex items-center cursor-pointer" onClick={() => navigate('/landing')}>
               <Logo />
             </div>
-            <span className="text-[#111827] text-lg font-semibold tracking-tight ml-1">Aigis Marketing</span>
+            <span className="text-[#111827] text-lg font-semibold tracking-tight ml-2">Aigis Marketing</span>
           </div>
-          <div className="flex items-center gap-6">
-            <span className="text-sm text-[#4b5563]" style={{ fontSize: '14px' }}>
-              {currentUser?.username || 'Guest'}
-            </span>
-            {currentUser && (
-              <button
-                onClick={handleLogout}
-                className="px-4 py-2 text-sm font-medium rounded-lg text-[#111827] hover:bg-[#f5f5f5] transition-colors"
-                style={{ fontSize: '14px', fontWeight: 500 }}
-              >
-                Logout
-              </button>
+          <div className="flex items-center" style={{ gap: '16px' }}>
+            {!currentUser ? (
+              <>
+                <button
+                  onClick={() => navigate('/login')}
+                  className="px-4 py-2 text-sm font-medium rounded-lg text-[#111827] hover:bg-[#f5f5f5] transition-colors"
+                  style={{ fontSize: '14px', fontWeight: 500 }}
+                >
+                  Sign In
+                </button>
+                <button
+                  onClick={() => navigate('/signup')}
+                  className="px-4 py-2 text-sm font-medium rounded-lg bg-[#1e293b] text-white hover:bg-[#334155] transition-colors"
+                  style={{ fontSize: '14px', fontWeight: 500 }}
+                >
+                  Sign Up
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="text-sm text-[#4b5563]" style={{ fontSize: '14px' }}>
+                  {currentUser?.email || currentUser?.username || 'User'}
+                </span>
+                <button
+                  onClick={handleLogout}
+                  className="px-4 py-2 text-sm font-medium rounded-lg text-[#111827] hover:bg-[#f5f5f5] transition-colors"
+                  style={{ fontSize: '14px', fontWeight: 500 }}
+                >
+                  Logout
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -219,7 +238,7 @@ function Dashboard() {
                   }}
                 >
                   {Icon ? (
-                    <Icon className="w-5 h-5" />
+                      <Icon className="w-5 h-5" />
                   ) : (
                     <MessageSquare className="w-5 h-5" />
                   )}

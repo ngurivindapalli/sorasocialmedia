@@ -472,6 +472,31 @@ class ImageGenerationService:
                                 else:
                                     # Already tried fallback or not using VEO3_API_KEY
                                     response.raise_for_status()
+                            elif response.status_code == 403:
+                                # Permission denied - provide helpful error message
+                                error_text = response.text[:1000] if response.text else ""
+                                print(f"[ImageGen] WARNING Permission denied (403) for {model_id_attempt} in {location}")
+                                print(f"[ImageGen] Error details: {error_text[:500]}")
+                                
+                                # Provide helpful troubleshooting
+                                error_msg = f"403 Forbidden - Permission denied for Imagen model '{model_id_attempt}'\n"
+                                error_msg += f"Project: {self.project_id}\n"
+                                error_msg += f"Location: {location}\n\n"
+                                error_msg += f"SOLUTIONS:\n"
+                                error_msg += f"1. Enable Vertex AI API:\n"
+                                error_msg += f"   https://console.cloud.google.com/apis/library/aiplatform.googleapis.com?project={self.project_id}\n\n"
+                                error_msg += f"2. Grant 'Vertex AI User' role to your service account:\n"
+                                error_msg += f"   https://console.cloud.google.com/iam-admin/iam?project={self.project_id}\n\n"
+                                error_msg += f"3. Check if Imagen 4 Ultra requires access request (may be in limited preview)\n"
+                                error_msg += f"   https://console.cloud.google.com/vertex-ai/models?project={self.project_id}\n\n"
+                                error_msg += f"4. Try a different model (Imagen 4 standard instead of Ultra):\n"
+                                error_msg += f"   Set IMAGEN_MODEL_ID=imagen-4.0-generate-001 in your .env\n\n"
+                                error_msg += f"5. Verify billing is enabled for your project\n"
+                                
+                                # Try next model instead of failing immediately
+                                print(f"[ImageGen] Trying next model as fallback...")
+                                last_error = error_msg
+                                continue  # Try next model
                             elif response.status_code == 404:
                                 # Model not found - try next model
                                 error_text = response.text[:500] if response.text else ""
@@ -483,7 +508,13 @@ class ImageGenerationService:
                                 response.raise_for_status()
                         except httpx.HTTPStatusError as e:
                             last_error = e
-                            if e.response.status_code == 404:
+                            if e.response.status_code == 403:
+                                # Permission denied - try next model
+                                error_text = e.response.text[:500] if e.response.text else ""
+                                print(f"[ImageGen] WARNING Permission denied (403) for {model_id_attempt} in {location}")
+                                print(f"[ImageGen] Trying next model as fallback...")
+                                continue  # Try next model
+                            elif e.response.status_code == 404:
                                 print(f"[ImageGen]   Model '{model_id_attempt}' not found in {location}, trying next model...")
                                 continue  # Try next model
                             else:

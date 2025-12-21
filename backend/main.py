@@ -2984,8 +2984,37 @@ async def get_marketing_post_suggestions(
                 detail="OpenAI service is not available. Please set OPENAI_API_KEY environment variable."
             )
         
+        # CRITICAL: Require authentication for personalized suggestions
+        if not current_user:
+            print(f"[API] ⚠️ No user authenticated - returning generic suggestions")
+            # Return generic suggestions if not authenticated
+            suggestions_list = [
+                {"topic": "Product launch announcement", "context": "General marketing topic", "reasoning": "Effective for building excitement"},
+                {"topic": "Behind-the-scenes company culture", "context": "General marketing topic", "reasoning": "Builds brand authenticity"},
+                {"topic": "Customer success story", "context": "General marketing topic", "reasoning": "Social proof and engagement"},
+                {"topic": "Industry tips and best practices", "context": "General marketing topic", "reasoning": "Educational content drives engagement"},
+                {"topic": "Company values and mission", "context": "General marketing topic", "reasoning": "Builds brand connection"}
+            ]
+            suggestions = [
+                MarketingPostSuggestion(
+                    topic=s.get("topic", ""),
+                    context=s.get("context"),
+                    reasoning=s.get("reasoning"),
+                    score=None,
+                    source="generic"
+                )
+                for s in suggestions_list[:count]
+            ]
+            return MarketingPostSuggestionsResponse(
+                suggestions=suggestions,
+                user_context_used=None
+            )
+        
         # Get user context from Hyperspell memories (documents are stored in memories)
-        user_id = current_user.email if current_user else "anonymous_user"
+        # Use email as user_id - this MUST match what was used when saving memories
+        user_id = current_user.email.lower().strip()  # Normalize email (lowercase, no whitespace)
+        print(f"[API] Using user email for Hyperspell: {user_id}")
+        print(f"[API] User details - username: {current_user.username}, email: {current_user.email}, id: {current_user.id}")
         user_context = ""
         post_performance_context = ""
         
@@ -2998,26 +3027,28 @@ async def get_marketing_post_suggestions(
         high_scoring_posts = []
         
         if hyperspell_service.is_available() and current_user:
-            print(f"[API] Getting ALL Hyperspell memories for user: {current_user.email}")
+            print(f"[API] Getting ALL Hyperspell memories for user: {user_id}")
+            print(f"[API] CRITICAL: Using normalized email '{user_id}' to query Hyperspell")
+            print(f"[API] Make sure memories were saved with the same email format!")
             
             # Run all Hyperspell queries in parallel for faster response
             import asyncio
             tasks = []
             
-            # Task 1: Get all memories
-            tasks.append(hyperspell_service.get_all_memories_context(current_user.email))
+            # Task 1: Get all memories - use normalized user_id
+            tasks.append(hyperspell_service.get_all_memories_context(user_id))
             
-            # Task 2: Get post performance context
+            # Task 2: Get post performance context - use normalized user_id
             tasks.append(get_post_performance_context(
                 hyperspell_service=hyperspell_service,
-                user_id=current_user.email
+                user_id=user_id
             ))
             
-            # Task 3: Get LinkedIn posts
+            # Task 3: Get LinkedIn posts - use normalized user_id
             async def get_linkedin_posts():
                 try:
                     return await hyperspell_service.query_memories(
-                        user_id=current_user.email,
+                        user_id=user_id,
                         query="LinkedIn Scored Post high score engagement metrics",
                         max_results=10
                     )
@@ -3037,42 +3068,46 @@ async def get_marketing_post_suggestions(
             if user_context:
                 print(f"[API] ✓ Retrieved all user memories ({len(user_context)} chars)")
             else:
-                print(f"[API] ⚠️ No memories found in Hyperspell for user: {current_user.email}")
+                print(f"[API] ⚠️ No memories found in Hyperspell for user: {user_id}")
                 print(f"[API] This might mean:")
                 print(f"[API]   1. No documents/competitors/posts have been added to Hyperspell")
                 print(f"[API]   2. Items were added but not indexed yet")
                 print(f"[API]   3. The user_id doesn't match (stored vs queried)")
+                print(f"[API]   4. Email format mismatch - stored with different case/format")
+                print(f"[API] DEBUG: User email from DB: '{current_user.email}'")
+                print(f"[API] DEBUG: Normalized user_id used: '{user_id}'")
+                print(f"[API] TIP: Make sure documents/competitors were saved with the same email format!")
             
             # Process LinkedIn posts if found
             if linkedin_search and linkedin_search.get("results") and isinstance(linkedin_search.get("results"), list):
-                results = linkedin_search.get("results", [])
-                for result in results:
-                    if isinstance(result, dict):
-                        content = result.get("content", result.get("text", ""))
-                        # Extract score from content
-                        score_match = re.search(r'Score: ([\d.]+)/100', content)
-                        if score_match:
-                            score = float(score_match.group(1))
-                            # Only include posts with score > 50
-                            if score >= 50:
-                                # Extract content snippet
-                                content_match = re.search(r'Content: (.+?)(?:\n|$)', content)
-                                content_text = content_match.group(1) if content_match else ""
-                                
-                                high_scoring_posts.append({
-                                    "score": score,
-                                    "content": content_text[:200] + "..." if len(content_text) > 200 else content_text
-                                })
-                
-                # Sort by score and take top 5
-                high_scoring_posts.sort(key=lambda x: x["score"], reverse=True)
-                high_scoring_posts = high_scoring_posts[:5]
-                
-                if high_scoring_posts:
-                    linkedin_posts_context = "HIGH-SCORING LINKEDIN POSTS (use these as inspiration):\n"
-                    for i, post in enumerate(high_scoring_posts, 1):
-                        linkedin_posts_context += f"{i}. Score: {post['score']}/100 - {post['content']}\n"
-                    print(f"[API] ✓ Found {len(high_scoring_posts)} high-scoring LinkedIn posts")
+                    results = linkedin_search.get("results", [])
+                    for result in results:
+                        if isinstance(result, dict):
+                            content = result.get("content", result.get("text", ""))
+                            # Extract score from content
+                            score_match = re.search(r'Score: ([\d.]+)/100', content)
+                            if score_match:
+                                score = float(score_match.group(1))
+                                # Only include posts with score > 50
+                                if score >= 50:
+                                    # Extract content snippet
+                                    content_match = re.search(r'Content: (.+?)(?:\n|$)', content)
+                                    content_text = content_match.group(1) if content_match else ""
+                                    
+                                    high_scoring_posts.append({
+                                        "score": score,
+                                        "content": content_text[:200] + "..." if len(content_text) > 200 else content_text
+                                    })
+                    
+                    # Sort by score and take top 5
+                    high_scoring_posts.sort(key=lambda x: x["score"], reverse=True)
+                    high_scoring_posts = high_scoring_posts[:5]
+                    
+                    if high_scoring_posts:
+                        linkedin_posts_context = "HIGH-SCORING LINKEDIN POSTS (use these as inspiration):\n"
+                        for i, post in enumerate(high_scoring_posts, 1):
+                            linkedin_posts_context += f"{i}. Score: {post['score']}/100 - {post['content']}\n"
+                        print(f"[API] ✓ Found {len(high_scoring_posts)} high-scoring LinkedIn posts")
         
         # Build prompt for generating suggestions
         context_section = ""
@@ -4595,8 +4630,10 @@ async def upload_to_hyperspell(
             )
         
         # Use email as user_id to match Hyperspell dashboard format
-        hyperspell_user_id = current_user.email
+        # Normalize email (lowercase, no whitespace) to ensure consistency
+        hyperspell_user_id = current_user.email.lower().strip()
         print(f"[API] Uploading document to Hyperspell for user: {hyperspell_user_id}")
+        print(f"[API] CRITICAL: Using normalized email '{hyperspell_user_id}' - must match query format!")
         
         # Save uploaded file temporarily
         import tempfile
@@ -4665,9 +4702,11 @@ async def add_hyperspell_memory(
             raise HTTPException(status_code=400, detail="Text is required")
         
         collection = request.get("collection", "user_memories")
-        user_id = current_user.email if current_user else "anonymous"
+        # Normalize email (lowercase, no whitespace) to ensure consistency
+        user_id = current_user.email.lower().strip() if current_user else "anonymous"
         
         print(f"[API] Adding text memory to Hyperspell for user: {user_id}")
+        print(f"[API] CRITICAL: Using normalized email '{user_id}' - must match query format!")
         
         result = await hyperspell_service.add_text_memory(
             user_id=user_id,

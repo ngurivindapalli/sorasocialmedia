@@ -57,9 +57,9 @@ function Signup() {
       if (result.success) {
         // Small delay to ensure token is saved
         setTimeout(() => {
-          // Navigate back to marketing post if that's where they came from
-          const from = new URLSearchParams(window.location.search).get('from') || '/dashboard'
-          navigate(from, { replace: true })
+        // Navigate back to marketing post if that's where they came from
+        const from = new URLSearchParams(window.location.search).get('from') || '/dashboard'
+        navigate(from, { replace: true })
         }, 100)
       } else {
         // Ensure error is a string
