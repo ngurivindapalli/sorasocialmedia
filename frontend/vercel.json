@@ -3,6 +3,7 @@
   "outputDirectory": "dist",
   "installCommand": "npm install",
   "framework": "vite",
+  "cleanUrls": true,
   "rewrites": [
     {
       "source": "/((?!static-posts|assets|.*\\.(js|css|png|jpg|jpeg|gif|svg|ico|json|webp|mp4|webm)).*)",
