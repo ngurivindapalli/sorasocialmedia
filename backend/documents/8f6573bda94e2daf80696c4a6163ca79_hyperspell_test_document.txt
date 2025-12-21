@@ -1,0 +1,147 @@
+# Jimmy Bijlani - Brand & Content Profile for Hyperspell Testing
+
+## Brand Identity
+
+**Name:** Jimmy Bijlani
+**Company:** AMP (AI consulting firm)
+**Location:** New York City (NYC)
+**Background:** Former BCG consultant, Google experience, building fast-growing AI consultancy
+
+## Core Expertise & Services
+
+**Primary Focus:** AI Consulting Services
+- AI strategy and roadmap development
+- Workflow redesign and automation
+- Connecting business goals with data and delivery
+- Translating AI ambition into execution
+
+**Positioning:** AMP sits between AI strategy and AI engineering - bridging "slideware and software"
+
+## Content Themes & Topics
+
+### Main Topics Covered:
+1. **AI-Native Consulting Firms**
+   - Rethinking value creation end-to-end
+   - Moving beyond "sprinkling tools"
+   - Reshaping consulting foundations
+   - Blurring line between software, services, knowledge, and automation
+
+2. **AI Reshaping Consulting Work**
+   - Single senior operator + multiple AI agents model
+   - Shifting pyramid structures
+   - Expanding quality and throughput without increasing headcount
+   - Consultant + agent teams as practical expansion model
+
+3. **Responsible AI**
+   - Governance, auditability, provenance
+   - Cultural readiness for regulatory compliance
+   - Operating discipline, not just policy
+   - Underestimated by most firms
+
+4. **AI Services Ecosystem**
+   - Fastest-growing job category in America
+   - Companies at various stages: drafting roadmaps, stuck in pilot purgatory, scaling
+   - Need for strategists who are part technologist, part therapist for confused executives
+
+## Content Style & Voice
+
+**Tone:** Professional, thoughtful, grounded, introspective
+**Approach:** 
+- Practical and execution-focused
+- Shares real insights from BCG, Google, and building AMP
+- Uses specific examples and case studies
+- Avoids hype, focuses on what's actually working
+
+**Writing Style:**
+- Direct and clear
+- Uses structured thinking
+- Balances insight with execution
+- Maintains precision in communication
+
+## Key Messaging
+
+**Core Message:** AI consulting is about translating ambition into execution, shaping strategy, redesigning workflows, and guiding organizations from idea to impact.
+
+**Differentiation:** 
+- Not just using ChatGPT as a task assistant
+- Using ChatGPT as a consulting partner with intentional onboarding
+- Teaching AI "how to think" not just "what to do"
+- Operating rules before first question
+
+## Community & Events
+
+**Event Type:** AI Services meetups and mixers
+**Location:** NYC (Pearl House, sky deck)
+**Format:** Small, invite-only, curated
+**Focus:** Founders, operators, practitioners comparing notes on what's working
+**Philosophy:** No panels, no stages, no pitch decks, no thought leadership theater - just useful conversations
+
+## Professional Network
+
+**Mentors/Colleagues:**
+- Sesh Iyer (former BCG, shaped BCG's digital and AI capabilities, built consultancy to ~50 people)
+- Nick Schneider, PhD (BCG X leader)
+- BCG alumni network
+
+**Speaking Engagements:**
+- Rutgers Consulting Group
+- Road to Consulting
+- BCG Worldwide Alumni Day
+
+## Brand Values
+
+1. **Grounded in Reality:** Avoids hype, focuses on what's actually working
+2. **Community Building:** Creating spaces for AI services ecosystem to connect
+3. **Practical Execution:** Bridge between strategy and implementation
+4. **Continuous Learning:** Field moves fast, requires adaptability and willingness to iterate
+5. **Cultural Excellence:** Striving to build BCG-like culture at AMP
+
+## Content Formats Used
+
+- LinkedIn posts and articles
+- Meetup announcements
+- Speaking engagements
+- Prompt sharing (e.g., sales call transcript analysis prompt)
+- Market positioning and thought leadership
+
+## Target Audience
+
+**Primary:** 
+- AI strategists, builders, operators, consultants
+- Founders and executives at companies on AI journey
+- Consulting professionals transitioning to AI-native models
+
+**Secondary:**
+- Students interested in consulting careers
+- Tech professionals exploring consulting
+- Companies stuck in "pilot purgatory"
+
+## Key Insights & Frameworks
+
+1. **AI Consulting Framework:** Translate ambition → execution → impact
+2. **Consultant + Agent Model:** Practical way to expand quality without increasing headcount
+3. **ChatGPT as Consulting Partner:** Requires intentional onboarding and operating rules
+4. **Responsible AI as Operating Discipline:** Not just policy, but daily practice
+
+## Test Queries for Hyperspell
+
+Use these queries to test Hyperspell memory retrieval:
+
+- "What is Jimmy Bijlani's company and what do they do?"
+- "What are the main topics Jimmy covers in his content?"
+- "What is Jimmy's approach to using ChatGPT in consulting?"
+- "What events does Jimmy host and where?"
+- "What is AMP's positioning in the consulting market?"
+- "What are Jimmy's key insights about AI-native consulting firms?"
+- "What is Jimmy's content style and tone?"
+- "What are the main themes in Jimmy's thought leadership?"
+
+---
+
+**Document Purpose:** This document is designed to test Hyperspell's ability to:
+1. Store brand and content information
+2. Retrieve relevant context when generating video scripts
+3. Maintain consistency in messaging and tone
+4. Provide personalized content based on stored preferences
+
+**Usage:** Upload this document to Hyperspell, then generate video scripts about AI consulting, Jimmy Bijlani, or AMP to see how Hyperspell enhances the prompts with this context.

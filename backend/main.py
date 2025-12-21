@@ -1,14 +1,19 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import os
 import asyncio
+import json
+import re
 from dotenv import load_dotenv
 
 from services.instagram_api import InstagramAPIService
 from services.openai_service import OpenAIService
 from services.linkedin_api import LinkedInAPIService
+from services.linkedin_scraper import LinkedInPostScraper
 from services.oauth_service import OAuthService
 from services.posting_service import PostingService
 from services.email_service import EmailService
@@ -16,15 +21,30 @@ from services.browser_automation import BrowserAutomationService
 from services.veo3_service import Veo3Service
 from services.image_generation_service import ImageGenerationService
 from services.video_composition_service import VideoCompositionService
+from services.document_service import DocumentService
+from services.user_context_service import UserContextService
+from services.hyperspell_service import HyperspellService
+from utils.hyperspell_helper import get_hyperspell_context
+from utils.post_memory_helper import save_post_to_memory, is_first_post, get_post_performance_context
+from services.web_research_service import WebResearchService
 from models.schemas import (
+    MarketingPostRequest,
+    MarketingPostResponse,
+    MarketingPostSuggestion,
+    MarketingPostSuggestionsResponse,
     VideoAnalysisRequest, VideoAnalysisResponse, ScrapedVideo, VideoResult,
     UserSignupRequest, UserLoginRequest, SocialMediaConnectionResponse,
     PostVideoRequest, PostVideoResponse,
     ManualInstagramPostRequest, ManualInstagramPostResponse,
     Veo3GenerateRequest, Veo3GenerateResponse, Veo3StatusResponse,
+    Veo3ExtendRequest, Veo3ExtendResponse,
     ImageGenerateRequest, ImageGenerateResponse,
     SmartVideoCompositionRequest, SmartVideoCompositionResponse,
-    InformationalVideoRequest, InformationalVideoResponse
+    InformationalVideoRequest, InformationalVideoResponse,
+    DocumentVideoRequest, DocumentVideoResponse,
+    VideoOptionsRequest, VideoOptionsResponse, ScriptApprovalRequest,
+    UserPreferencesRequest, UserPreferencesResponse, UserContextResponse,
+    FindCompetitorsRequest
 )
 from database import init_db, get_db, User, SocialMediaConnection, PostHistory
 from auth_utils import get_password_hash, verify_password, create_access_token, get_current_user
@@ -113,7 +133,33 @@ if ANTHROPIC_API_KEY:
 else:
     print("[DEBUG] ANTHROPIC_API_KEY not found. Claude features will be disabled.")
 
+# Get Hyperspell API key
+HYPERSPELL_API_KEY = os.getenv('HYPERSPELL_API_KEY')
+if HYPERSPELL_API_KEY:
+    print(f"[DEBUG] Hyperspell API key found: {HYPERSPELL_API_KEY[:20]}...{HYPERSPELL_API_KEY[-4:]}")
+else:
+    print("[DEBUG] HYPERSPELL_API_KEY not found. Hyperspell memory features will be disabled.")
+
 app = FastAPI(title="Instagram Video to Sora Script Generator")
+
+# Add exception handler for validation errors to provide better error messages
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle FastAPI validation errors with detailed logging"""
+    print(f"[API] Validation error on {request.method} {request.url}")
+    print(f"[API] Validation errors: {exc.errors()}")
+    
+    # Return detailed validation errors
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": exc.errors(),
+            "body": str(exc.body) if hasattr(exc, 'body') else None
+        }
+    )
 
 # CORS middleware
 app.add_middleware(
@@ -137,6 +183,7 @@ init_db()
 # Initialize services
 instagram_service = InstagramAPIService()
 linkedin_service = LinkedInAPIService()
+linkedin_scraper = LinkedInPostScraper()
 oauth_service = OAuthService()
 posting_service = PostingService()
 email_service = EmailService()
@@ -144,14 +191,27 @@ browser_automation_service = BrowserAutomationService()
 veo3_service = Veo3Service()
 image_generation_service = ImageGenerationService()
 video_composition_service = VideoCompositionService()
+document_service = DocumentService()
+# Initialize Hyperspell service
+hyperspell_service = HyperspellService()
+# Initialize user context service with Hyperspell integration
+user_context_service = UserContextService(hyperspell_service=hyperspell_service)
 # Check for fine-tuned model in environment
 fine_tuned_model = os.getenv("OPENAI_FINE_TUNED_MODEL")
 # Only initialize OpenAI service if API key is available
 openai_service = None
 if OPENAI_API_KEY:
-    openai_service = OpenAIService(api_key=OPENAI_API_KEY, anthropic_key=ANTHROPIC_API_KEY, fine_tuned_model=fine_tuned_model)
+    openai_service = OpenAIService(
+        api_key=OPENAI_API_KEY, 
+        anthropic_key=ANTHROPIC_API_KEY, 
+        fine_tuned_model=fine_tuned_model,
+        hyperspell_service=hyperspell_service  # Pass Hyperspell for Claude integration
+    )
 else:
     print("[INFO] OpenAI service not initialized - API key missing")
+
+# Initialize web research service AFTER openai_service (needs it for AI analysis)
+web_research_service = WebResearchService(openai_service=openai_service if openai_service else None)
 
 # Store OAuth states temporarily (in production, use Redis)
 oauth_states = {}
@@ -173,6 +233,7 @@ async def root():
             "image_generation": "✓ Active" if image_generation_service.project_id else "⚠ Disabled - GOOGLE_CLOUD_PROJECT_ID not set",
             "gemini_3_pro_image": "✓ Active" if image_generation_service.project_id else "⚠ Disabled - GOOGLE_CLOUD_PROJECT_ID not set (uses Vertex AI)",
             "smart_composition": "✓ Active" if video_composition_service.openai_client else "⚠ Disabled",
+            "hyperspell": "✓ Active" if hyperspell_service.is_available() else "⚠ Disabled - HYPERSPELL_API_KEY not set",
         },
         "model": openai_service.model if openai_service else "Not configured"
     }
@@ -204,10 +265,35 @@ async def analyze_videos(request: VideoAnalysisRequest):
         print(f"[API] 📋 Extracting profile context for: @{request.username}")
         profile_context = await instagram_service.get_profile_context(request.username)
         
-        # Step 2: Research profile/page context using GPT-4 (works for all account types)
+        # Step 2: Get document context if provided
+        document_context = ""
+        if request.document_ids and len(request.document_ids) > 0:
+            print(f"[API] 📄 Retrieving context from {len(request.document_ids)} document(s)...")
+            try:
+                document_context = document_service.get_documents_context(request.document_ids)
+                print(f"[API] ✓ Document context retrieved ({len(document_context)} characters)")
+            except Exception as doc_error:
+                print(f"[API] ⚠️ Error retrieving document context: {doc_error}")
+                document_context = ""
+        
+        # Step 3: Research profile/page context using GPT-4 (works for all account types)
         print(f"[API] 🔍 Researching profile context (works for all account types)...")
-        page_context = await openai_service.research_profile_context(profile_context)
+        page_context = await openai_service.research_profile_context(profile_context, document_context)
         print(f"[API] ✓ Profile context researched: {len(page_context)} characters")
+        
+        # Step 3.5: Get Hyperspell memory context for enhanced personalization (reusable helper)
+        memory_query = f"{profile_context.get('biography', '')[:100]} {document_context[:100] if document_context else ''}".strip()
+        if memory_query:
+            hyperspell_memory_context = await get_hyperspell_context(
+                hyperspell_service=hyperspell_service,
+                query=memory_query,
+                user_email=None  # Can add user auth later
+            )
+            if hyperspell_memory_context:
+                # Enhance page_context with Hyperspell memory
+                page_context = f"""{hyperspell_memory_context}
+
+{page_context}"""
         
         # Step 3: Scrape videos from Instagram
         print(f"[API] Analyzing Instagram user: @{request.username}")
@@ -224,7 +310,7 @@ async def analyze_videos(request: VideoAnalysisRequest):
         # Convert to ScrapedVideo objects for response
         scraped_videos = [ScrapedVideo(**v) for v in videos]
         
-        # Step 4: Process each video with Build Hours features (analysis phase)
+        # Step 5: Process each video with Build Hours features (analysis phase)
         print(f"[API] 🔄 Phase 1: Analyzing videos (transcription + script generation with context)...")
         analyzed_results = []
         video_data_for_sora = []  # Store data for parallel Sora generation
@@ -259,36 +345,49 @@ async def analyze_videos(request: VideoAnalysisRequest):
                 print(f"[API] Transcribing video...")
                 transcription = await openai_service.transcribe_video(video_path)
                 
-                # Generate regular Sora script (always works as fallback) with page context
+                # Get user_id for Hyperspell memory enhancement (if authenticated)
+                user_id_for_memory = None
+                try:
+                    # TODO: Get actual user_id from authentication token when available
+                    # For now, we'll enhance with Hyperspell if available
+                    user_id_for_memory = "default_user"  # Will be replaced with actual user_id
+                except:
+                    pass
+                
+                # Generate regular Sora script (always works as fallback) with page context + Hyperspell
                 llm_provider = request.llm_provider or "openai"
-                print(f"[API] Generating Sora script with page context using {llm_provider}...")
+                print(f"[API] Generating Sora script with page context + Hyperspell memory using {llm_provider}...")
                 sora_script = await openai_service.generate_sora_script(
                     transcription=transcription,
                     video_metadata={
                         'views': video['views'],
                         'likes': video['likes'],
-                        'text': video['text']
+                        'text': video['text'],
+                        'user_id': user_id_for_memory
                     },
                     target_duration=request.video_seconds or 8,
-                    page_context=page_context,
-                    llm_provider=llm_provider
+                    page_context=page_context,  # Already enhanced with Hyperspell if available
+                    llm_provider=llm_provider,
+                    user_id=user_id_for_memory
                 )
                 
-                # Try to generate structured Sora script (OpenAI Build Hours) with page context
+                # Try to generate structured Sora script (OpenAI Build Hours) with page context + Hyperspell
                 structured_sora = None
                 try:
-                    print(f"[API] 📐 Generating structured Sora script with page context (Build Hours: Structured Outputs)...")
+                    print(f"[API] 📐 Generating structured Sora script with page context + Hyperspell memory (Build Hours: Structured Outputs)...")
                     structured_sora = await openai_service.generate_structured_sora_script(
                         transcription=transcription,
                         video_metadata={
                             'views': video['views'],
                             'likes': video['likes'],
                             'text': video['text'],
-                            'duration': video.get('duration', 0)
+                            'duration': video.get('duration', 0),
+                            'user_id': user_id_for_memory
                         },
                         thumbnail_analysis=thumbnail_analysis,  # Include Vision API data
                         target_duration=request.video_seconds or 8,  # Pass user's desired duration
-                        page_context=page_context
+                        page_context=page_context,  # Already enhanced with Hyperspell if available
+                        user_id=user_id_for_memory  # For additional Hyperspell queries
                     )
                     print(f"[API] ✓ Structured output generated successfully")
                 except Exception as struct_error:
@@ -326,19 +425,10 @@ async def analyze_videos(request: VideoAnalysisRequest):
                 # Use structured prompt if available, otherwise use regular script
                 video_prompt = structured_sora.full_prompt if structured_sora else sora_script
                 
-                # Clamp video_seconds to valid range (5-16) and closest valid Sora value
-                user_seconds = request.video_seconds or 8
-                user_seconds = max(5, min(16, user_seconds))  # Clamp to 5-16
-                # Round to nearest valid Sora value (4, 8, 12)
-                if user_seconds <= 6:
-                    sora_seconds = 4
-                elif user_seconds <= 10:
-                    sora_seconds = 8
-                else:
-                    sora_seconds = 12
-                
                 # Determine which video model to use
                 video_model = request.video_model or "sora-2"
+                user_seconds = request.video_seconds or 8
+                
                 print(f"[API] 🎬 Video model selection:")
                 print(f"[API]   Request video_model: {request.video_model}")
                 print(f"[API]   Selected video_model: {video_model}")
@@ -353,11 +443,21 @@ async def analyze_videos(request: VideoAnalysisRequest):
                         print(f"[API]   To use Veo 3, set GOOGLE_CLOUD_PROJECT_ID in backend/.env file")
                         video_model = "sora-2"
                     else:
+                        # Validate Veo 3 duration constraints (4-60 seconds)
+                        veo3_seconds = max(4, min(60, user_seconds))  # Clamp to 4-60
+                        if veo3_seconds != user_seconds:
+                            print(f"[API] ⚠️ Veo 3 duration adjusted from {user_seconds}s to {veo3_seconds}s (must be 4-60 seconds)")
+                        
+                        # Guardrail: Warn if duration is very long (may take significant time)
+                        if veo3_seconds > 30:
+                            print(f"[API] ⚠️ Veo 3 generation with {veo3_seconds}s duration may take 3-5 minutes")
+                        
                         try:
                             print(f"[API] 🎥 Calling Veo 3 service.generate_video()...")
+                            print(f"[API]   Duration: {veo3_seconds}s (Veo 3 supports 4-60 seconds)")
                             veo3_result = await veo3_service.generate_video(
                                 prompt=video_prompt,
-                                duration=sora_seconds,
+                                duration=veo3_seconds,
                                 resolution="1280x720"
                             )
                             print(f"[API] ✅ Veo 3 generation successful! Job ID: {veo3_result.get('job_id')}")
@@ -380,7 +480,19 @@ async def analyze_videos(request: VideoAnalysisRequest):
                 
                 # Use Sora 2 (default or fallback)
                 if video_model == "sora-2":
+                    # Clamp video_seconds to valid range (5-16) and closest valid Sora value
+                    user_seconds = request.video_seconds or 8
+                    user_seconds = max(5, min(16, user_seconds))  # Clamp to 5-16
+                    # Round to nearest valid Sora value (4, 8, 12)
+                    if user_seconds <= 6:
+                        sora_seconds = 4
+                    elif user_seconds <= 10:
+                        sora_seconds = 8
+                    else:
+                        sora_seconds = 12
+                    
                     print(f"[API] 🎬 Using Sora 2 for video generation...")
+                    print(f"[API]   Duration: {sora_seconds}s (Sora 2 supports 4, 8, or 12 seconds)")
                     sora_job_info = await openai_service.generate_sora_video(
                         prompt=video_prompt,
                         model=SORA_MODEL_DEFAULT,  # Configurable via SORA_MODEL env var (default: "sora-2")
@@ -629,19 +741,9 @@ async def analyze_multi_users(request: dict):
         try:
             combined_prompt = combined_structured.full_prompt if combined_structured else combined_script
             
-            # Clamp video_seconds to valid range (5-16) and closest valid value
-            user_seconds = multi_request.video_seconds or 12
-            user_seconds = max(5, min(16, user_seconds))  # Clamp to 5-16
-            # Round to nearest valid value (4, 8, 12)
-            if user_seconds <= 6:
-                video_seconds = 4
-            elif user_seconds <= 10:
-                video_seconds = 8
-            else:
-                video_seconds = 12
-            
             # Determine which video model to use for combined video
             video_model = multi_request.video_model or "sora-2-pro"
+            user_seconds = multi_request.video_seconds or 12
             print(f"[API] 🎬 Generating combined video using {video_model}...")
             
             if video_model == "veo-3":
@@ -649,8 +751,26 @@ async def analyze_multi_users(request: dict):
                 if not veo3_service.project_id:
                     print(f"[API] ⚠️ Veo 3 not configured, falling back to Sora 2 Pro")
                     video_model = "sora-2-pro"
+                    # Fallback to Sora duration validation
+                    user_seconds = max(5, min(16, user_seconds))
+                    if user_seconds <= 6:
+                        video_seconds = 4
+                    elif user_seconds <= 10:
+                        video_seconds = 8
+                    else:
+                        video_seconds = 12
                 else:
+                    # Validate Veo 3 duration constraints (4-60 seconds)
+                    video_seconds = max(4, min(60, user_seconds))
+                    if video_seconds != user_seconds:
+                        print(f"[API] ⚠️ Veo 3 duration adjusted from {user_seconds}s to {video_seconds}s (must be 4-60 seconds)")
+                    
+                    # Guardrail: Warn if duration is very long
+                    if video_seconds > 30:
+                        print(f"[API] ⚠️ Veo 3 generation with {video_seconds}s duration may take 3-5 minutes")
+                    
                     try:
+                        print(f"[API] 🎥 Using Veo 3 for combined video (duration: {video_seconds}s)")
                         veo3_result = await veo3_service.generate_video(
                             prompt=combined_prompt,
                             duration=video_seconds,
@@ -670,9 +790,27 @@ async def analyze_multi_users(request: dict):
                     except Exception as veo3_error:
                         print(f"[API] Veo 3 generation failed, falling back to Sora 2 Pro: {veo3_error}")
                         video_model = "sora-2-pro"
+                        # Fallback to Sora duration validation
+                        user_seconds = max(5, min(16, user_seconds))
+                        if user_seconds <= 6:
+                            video_seconds = 4
+                        elif user_seconds <= 10:
+                            video_seconds = 8
+                        else:
+                            video_seconds = 12
             
             # Use Sora 2 Pro for combined videos (default or fallback)
             if video_model and video_model.startswith("sora"):
+                # Clamp to valid Sora duration if not already set
+                if video_model == "sora-2-pro":
+                    user_seconds = max(5, min(16, user_seconds))
+                    if user_seconds <= 6:
+                        video_seconds = 4
+                    elif user_seconds <= 10:
+                        video_seconds = 8
+                    else:
+                        video_seconds = 12
+                print(f"[API] 🎬 Using Sora 2 Pro for combined video (duration: {video_seconds}s)")
                 sora_job_info = await openai_service.generate_sora_video(
                     prompt=combined_prompt,
                     model=SORA_MODEL_PRO,  # Configurable via SORA_MODEL_PRO env var (default: "sora-2-pro")
@@ -1440,25 +1578,63 @@ Always provide clear, concise answers and guide users to the right tools for the
 
 # ===== AUTHENTICATION ENDPOINTS =====
 
-@app.post("/api/auth/signup")
-async def signup(request: UserSignupRequest, db: Session = Depends(get_db)):
-    """Create a new user account"""
+@app.post("/api/auth/signup", response_model=None)
+async def signup(
+    request: UserSignupRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Create a new user account.
+    """
     try:
+        username = request.username
+        email = request.email
+        password = request.password
+        
+        print(f"[AUTH] Signup request received")
+        print(f"[AUTH] Username: {username[:20] if username else 'None'}...")
+        print(f"[AUTH] Email: {email[:30] if email else 'None'}...")
+        print(f"[AUTH] Password length: {len(password) if password else 0} chars")
+        
+        # Validate password length FIRST (bcrypt limit is 72 bytes)
+        # This must happen before any other processing
+        if not password:
+            raise HTTPException(status_code=400, detail="Password is required")
+        
+        # Check character length first (quick check)
+        if len(password) > 72:
+            raise HTTPException(
+                status_code=400, 
+                detail="Password is too long. Maximum length is 72 characters. Please use a shorter password."
+            )
+        
+        # Check byte length (more accurate for bcrypt)
+        password_bytes = password.encode('utf-8')
+        print(f"[AUTH] Password byte length: {len(password_bytes)} bytes")
+        
+        if len(password_bytes) > 72:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Password is too long. Maximum byte length is 72 bytes, but your password is {len(password_bytes)} bytes. Please use a shorter password."
+            )
+        
+        print(f"[AUTH] ✓ Password validation passed: {len(password)} chars, {len(password_bytes)} bytes")
+        
         # Check if username already exists
-        existing_user = db.query(User).filter(User.username == request.username).first()
+        existing_user = db.query(User).filter(User.username == username).first()
         if existing_user:
             raise HTTPException(status_code=400, detail="Username already exists")
         
         # Check if email already exists
-        existing_email = db.query(User).filter(User.email == request.email).first()
+        existing_email = db.query(User).filter(User.email == email.lower().strip()).first()
         if existing_email:
             raise HTTPException(status_code=400, detail="Email already exists")
         
         # Create new user
-        hashed_password = get_password_hash(request.password)
+        hashed_password = get_password_hash(password)
         new_user = User(
-            username=request.username,
-            email=request.email,
+            username=username,
+            email=email.lower().strip(),
             password_hash=hashed_password
         )
         db.add(new_user)
@@ -1482,6 +1658,12 @@ async def signup(request: UserSignupRequest, db: Session = Depends(get_db)):
     except HTTPException:
         # Re-raise HTTP exceptions (like username/email already exists)
         raise
+    except ValueError as ve:
+        # Handle validation errors (e.g., from Form() parameters)
+        print(f"[AUTH] Validation error: {str(ve)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=422, detail=f"Validation error: {str(ve)}")
     except Exception as e:
         print(f"[AUTH] Signup error: {str(e)}")
         import traceback
@@ -1492,9 +1674,10 @@ async def signup(request: UserSignupRequest, db: Session = Depends(get_db)):
 @app.post("/api/auth/login")
 async def login(request: UserLoginRequest, db: Session = Depends(get_db)):
     """Login user and return JWT token"""
-    user = db.query(User).filter(User.username == request.username).first()
+    # Try to find user by email
+    user = db.query(User).filter(User.email == request.email.lower().strip()).first()
     if not user or not verify_password(request.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+        raise HTTPException(status_code=401, detail="Invalid email or password")
     
     # Create access token
     access_token = create_access_token(data={"sub": user.username})
@@ -1999,11 +2182,13 @@ async def generate_veo3_video(request: Veo3GenerateRequest):
 
 
 @app.get("/api/veo3/status/{job_id:path}", response_model=Veo3StatusResponse)
-async def get_veo3_status(job_id: str):
+async def get_veo3_status(job_id: str, extend: Optional[bool] = None):
     """Check the status of a Veo 3 video generation job
     
     job_id can be a full operation path like:
     projects/{project}/locations/{location}/publishers/google/models/{model}/operations/{operation_id}
+    
+    If extend=true and video is completed, will automatically extend the video.
     """
     try:
         if not veo3_service.project_id:
@@ -2017,6 +2202,134 @@ async def get_veo3_status(job_id: str):
         job_id = unquote(job_id)
         
         status = await veo3_service.get_video_status(job_id)
+        
+        # Check video status
+        status_value = status.get("status")
+        print(f"[API] 🔍 Status check - status: {status_value}")
+        
+        # If video generation failed, log the error and return immediately
+        if status_value == "failed":
+            error_msg = status.get("error", "Unknown error")
+            print(f"[API] ❌ Video generation FAILED: {error_msg}")
+            return Veo3StatusResponse(**status)
+        
+        # Check if this job needs extensions (from cache)
+        extension_metadata = None
+        is_extension_job = status.get("is_extension", False)
+        
+        # Check extension cache to see if this job needs extensions
+        if not is_extension_job and hasattr(veo3_service, '_extension_cache'):
+            for cached_job_id, cached_meta in veo3_service._extension_cache.items():
+                # Check if this job_id matches (could be full path or just operation ID)
+                if job_id == cached_job_id or job_id.endswith(cached_job_id) or cached_job_id.endswith(job_id):
+                    extension_metadata = cached_meta
+                    is_extension_job = True
+                    break
+        
+        # If video is completed, check if we need to trigger extensions
+        if status_value == "completed":
+            if extension_metadata and extension_metadata.get("needs_extension", False):
+                extensions_completed = extension_metadata.get("extensions_completed", 0)
+                extension_count = extension_metadata.get("extension_count", 0)
+                base_job_id = extension_metadata.get("base_job_id") or extension_metadata.get("original_job_id") or job_id
+                
+                print(f"[API] ✅ Base video completed! Extensions: {extensions_completed}/{extension_count}")
+                
+                # If we haven't completed all extensions, trigger the next one
+                # BUT: Check if we've already attempted this extension and failed (prevent infinite loops)
+                extension_attempted = extension_metadata.get("extension_attempted", False)
+                extension_failed = extension_metadata.get("extension_failed", False)
+                
+                if extensions_completed < extension_count:
+                    # Prevent infinite retry loops - if extension failed, don't retry
+                    if extension_failed:
+                        print(f"[API] ⚠️ Extension previously failed, not retrying to prevent infinite loop")
+                        status["needs_extension"] = True
+                        status["extension_count"] = extension_count
+                        status["extensions_completed"] = extensions_completed
+                        status["error"] = extension_metadata.get("extension_error", "Extension failed")
+                        return Veo3StatusResponse(**status)
+                    
+                    # Only attempt extension if we haven't tried yet, or if previous attempt succeeded
+                    if not extension_attempted or extensions_completed > 0:
+                        try:
+                            print(f"[API] 🎬 Triggering extension {extensions_completed + 1}/{extension_count}...")
+                            
+                            # Mark that we're attempting extension (prevent duplicate attempts)
+                            extension_metadata["extension_attempted"] = True
+                            extension_metadata["extension_failed"] = False
+                            veo3_service._extension_cache[base_job_id] = extension_metadata
+                            
+                            # Use Gemini API to extend the video
+                            # For the first extension, use the base job_id
+                            # For subsequent extensions, use the last extension job_id
+                            source_job_id = base_job_id if extensions_completed == 0 else job_id
+                            
+                            extension_result = await veo3_service.extend_video_gemini_api(
+                                base_job_id=source_job_id,
+                                extension_seconds=7,
+                                max_extensions=1
+                            )
+                            
+                            # Update metadata - extension started successfully
+                            extension_metadata["extensions_completed"] = extensions_completed + 1
+                            extension_metadata["current_duration"] = 8 + (extension_metadata["extensions_completed"] * 7)
+                            extension_metadata["last_extension_job_id"] = extension_result.get("job_id")
+                            extension_metadata["extension_attempted"] = False  # Reset for next extension
+                            extension_metadata["extension_failed"] = False
+                            
+                            # Update cache with new extension job
+                            new_extension_job_id = extension_result.get("job_id")
+                            veo3_service._extension_cache[new_extension_job_id] = extension_metadata
+                            veo3_service._extension_cache[base_job_id] = extension_metadata
+                            
+                            print(f"[API] ✅ Extension {extensions_completed + 1} started! Job ID: {new_extension_job_id}")
+                            
+                            # Return status showing extension in progress
+                            status["needs_extension"] = True
+                            status["extension_count"] = extension_count
+                            status["extensions_completed"] = extensions_completed + 1
+                            status["is_extension"] = True
+                            status["status"] = "in_progress"  # Extension is now in progress
+                            status["job_id"] = new_extension_job_id  # Return the extension job ID
+                            return Veo3StatusResponse(**status)
+                            
+                        except Exception as ext_error:
+                            print(f"[API] ❌ Extension failed: {ext_error}")
+                            # Mark extension as failed to prevent infinite retries
+                            extension_metadata["extension_failed"] = True
+                            extension_metadata["extension_error"] = str(ext_error)
+                            extension_metadata["extension_attempted"] = False  # Allow retry on next status check if needed
+                            veo3_service._extension_cache[base_job_id] = extension_metadata
+                            
+                            # Return base video status with error
+                            status["needs_extension"] = True
+                            status["extension_count"] = extension_count
+                            status["extensions_completed"] = extensions_completed
+                            status["error"] = f"Extension failed: {str(ext_error)}"
+                            return Veo3StatusResponse(**status)
+                    else:
+                        # Extension already attempted, waiting for it to complete
+                        print(f"[API] ⏳ Extension {extensions_completed + 1} already attempted, waiting for completion...")
+                else:
+                    # All extensions completed!
+                    print(f"[API] ✅ All extensions completed! Final duration: ~{8 + (extension_count * 7)}s")
+                    status["needs_extension"] = True
+                    status["extension_count"] = extension_count
+                    status["extensions_completed"] = extensions_completed
+                    status["is_extension"] = True
+            else:
+                # No extensions needed or metadata not found
+                if extension_metadata:
+                    status["needs_extension"] = extension_metadata.get("needs_extension", False)
+                    status["extension_count"] = extension_metadata.get("extension_count", 0)
+                    status["extensions_completed"] = extension_metadata.get("extensions_completed", 0)
+                else:
+                    status["needs_extension"] = False
+                    status["extension_count"] = 0
+                    status["extensions_completed"] = 0
+                status["is_extension"] = is_extension_job
+        
         return Veo3StatusResponse(**status)
     except HTTPException:
         raise
@@ -2067,6 +2380,42 @@ async def download_veo3_video(job_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/veo3/extend", response_model=Veo3ExtendResponse)
+async def extend_veo3_video(request: Veo3ExtendRequest):
+    """
+    Extend a previously generated Veo 3.1 video using Gemini API.
+    This uses the correct implementation with 'source' parameter (not 'video').
+    Can extend videos 7 seconds at a time, up to 20 times (148 seconds total).
+    """
+    try:
+        if not veo3_service.project_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Veo 3 not configured. Set GOOGLE_CLOUD_PROJECT_ID in .env"
+            )
+        
+        print(f"[API] 🎬 Extending Veo 3 video via Gemini API")
+        print(f"[API]   Base job ID: {request.base_job_id}")
+        print(f"[API]   Extension: {request.extension_seconds}s, max {request.max_extensions} extensions")
+        
+        # Use the Gemini API extension method
+        result = await veo3_service.extend_video_gemini_api(
+            base_job_id=request.base_job_id,
+            extension_seconds=request.extension_seconds,
+            max_extensions=request.max_extensions
+        )
+        
+        return Veo3ExtendResponse(**result)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] ❌ Extension error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/image/generate", response_model=ImageGenerateResponse)
 async def generate_image(request: ImageGenerateRequest):
     """
@@ -2094,6 +2443,804 @@ async def generate_image(request: ImageGenerateRequest):
         raise
     except Exception as e:
         print(f"[API] Image generation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/marketing-post/create", response_model=MarketingPostResponse)
+async def create_marketing_post(
+    request: MarketingPostRequest,
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Create a complete marketing post with image and caption using nanobanana.
+    Uses Hyperspell memories for personalized content based on logged-in user's data.
+    Generates an image, creates engaging caption, and optionally posts to Instagram.
+    
+    Features:
+    - First post is automatically an intro post about the company
+    - All posts are saved to Hyperspell memory
+    - Future posts use performance data from previous posts
+    """
+    try:
+        # Use user email if authenticated, otherwise use a default/anonymous identifier
+        if current_user:
+            user_id = current_user.email
+        else:
+            # For unauthenticated users, use a default identifier
+            # In production, you might want to require authentication
+            user_id = "anonymous_user"
+            print(f"[API] ⚠️ Creating post without authentication (using anonymous user)")
+        
+        print(f"[API] 📸 Creating marketing post for topic: {request.topic} (User: {user_id})")
+        
+        # First post check disabled - removed to prevent overwriting user-generated scripts
+        # is_first = False
+        # if hyperspell_service.is_available():
+        #     is_first = await is_first_post(hyperspell_service, user_id)
+        is_first = False  # Always set to False to disable first post logic
+        
+        # Get user context from Hyperspell (company info, brand context)
+        user_context = ""
+        post_performance_context = ""
+        
+        if hyperspell_service.is_available():
+            user_context = await get_hyperspell_context(
+                hyperspell_service=hyperspell_service,
+                query=f"company information business brand products services {request.brand_context or ''}",
+                user_email=user_id if current_user else None
+            )
+            
+            # Get post performance context (previous posts and their performance)
+            post_performance_context = await get_post_performance_context(
+                hyperspell_service=hyperspell_service,
+                user_id=user_id
+            )
+        
+        # First post topic modification disabled - removed to prevent overwriting user-generated scripts
+        # original_topic = request.topic
+        # if is_first:
+        #     ... (removed first post logic)
+        
+        # Step 1: Generate image prompt if not provided
+        image_prompt = request.image_prompt
+        if not image_prompt and openai_service:
+            print(f"[API] Generating image prompt from topic...")
+            try:
+                # Build prompt with user context if available
+                context_section = ""
+                if user_context:
+                    context_section = f"\n\nUSER CONTEXT (from uploaded documents):\n{user_context}\n\nUse this context to make the image more personalized and relevant."
+                
+                prompt_generation = await openai_service.client.chat.completions.create(
+                    model=openai_service.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are an expert at creating detailed, visual image prompts for marketing posts. Create prompts that are photorealistic, engaging, and suitable for social media."
+                        },
+                        {
+                            "role": "user",
+                            "content": f"""Create a detailed, ultra high-quality, photorealistic image prompt for a marketing post about: {request.topic}
+
+{f"Brand context: {request.brand_context}" if request.brand_context else ""}
+{context_section}
+
+Requirements:
+- Ultra high quality, 8K resolution, professional photography
+- Sharp focus, crisp details, perfect text rendering
+- Readable text if text is included
+- High contrast, vibrant colors, professional lighting
+- Studio quality, marketing quality, social media ready
+- Photorealistic, no AI artifacts, no blurriness
+- Professional and high-quality
+- Suitable for social media (Instagram/LinkedIn)
+- Visually appealing and eye-catching
+- Relevant to the topic
+- Personalized based on user context if provided
+
+Return ONLY the image prompt text, no additional text."""
+                        }
+                    ],
+                    temperature=0.7,
+                    max_tokens=200
+                )
+                image_prompt = prompt_generation.choices[0].message.content.strip()
+                print(f"[API] ✓ Generated image prompt: {image_prompt[:100]}...")
+            except Exception as e:
+                print(f"[API] ⚠️ Failed to generate image prompt, using topic directly: {e}")
+                image_prompt = f"Ultra high quality, photorealistic, professional photography, 8K resolution, sharp focus, crisp details, perfect text rendering, readable text, high contrast, vibrant colors, professional lighting, studio quality, marketing quality, social media ready: Professional marketing image about {request.topic}"
+        elif not image_prompt:
+            image_prompt = f"Professional marketing image about {request.topic}, high quality, social media style"
+        
+        # Step 2: Generate image using nanobanana
+        print(f"[API] 🎨 Generating image with nanobanana...")
+        if not image_generation_service.project_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Image generation not configured. Set GOOGLE_CLOUD_PROJECT_ID in your .env file (same as Veo 3)"
+            )
+        
+        # Determine size based on aspect ratio
+        size_map = {
+            "1:1": "1024x1024",
+            "16:9": "1792x1024",
+            "9:16": "1024x1792",
+            "4:3": "1024x768",
+            "3:4": "768x1024"
+        }
+        size = size_map.get(request.aspect_ratio or "1:1", "1024x1024")
+        
+        image_result = await image_generation_service.generate_image(
+            prompt=image_prompt,
+            model="nanobanana",
+            size=size,
+            quality="high",
+            aspect_ratio=request.aspect_ratio or "1:1"
+        )
+        
+        if not image_result.get("image_url") and not image_result.get("image_base64"):
+            raise HTTPException(status_code=500, detail="Failed to generate image")
+        
+        print(f"[API] ✓ Image generated successfully")
+        
+        # Step 3: Generate marketing caption
+        print(f"[API] ✍️ Generating marketing caption...")
+        caption = ""
+        hashtags = []
+        
+        if openai_service:
+            try:
+                style_guidance = {
+                    "engaging": "Create an engaging, attention-grabbing caption that hooks the reader",
+                    "professional": "Create a professional, polished caption suitable for LinkedIn or business accounts",
+                    "casual": "Create a casual, friendly caption that feels authentic and relatable",
+                    "educational": "Create an educational caption that teaches something valuable"
+                }
+                style_instruction = style_guidance.get(request.caption_style or "engaging", style_guidance["engaging"])
+                
+                # Build caption prompt with user context and post performance context
+                context_section = ""
+                if user_context:
+                    context_section = f"\n\nUSER CONTEXT (from uploaded documents - use this to personalize the caption):\n{user_context}\n\nMake the caption feel authentic and personalized based on this context."
+                
+                performance_section = ""
+                if post_performance_context:
+                    performance_section = f"\n\nPOST PERFORMANCE CONTEXT (learn from previous posts):\n{post_performance_context}\n\nUse insights from high-performing posts to create better content. Avoid approaches that didn't work well."
+                
+                # First post instruction disabled - removed to prevent overwriting user-generated scripts
+                # first_post_instruction = ""
+                # if is_first:
+                #     ... (removed first post instruction)
+                
+                caption_prompt = f"""Create a marketing caption for a social media post about: {request.topic}
+
+{f"Brand context: {request.brand_context}" if request.brand_context else ""}
+{context_section}
+{performance_section}
+
+Style: {style_instruction}
+Length: 2-4 sentences (concise but engaging)
+Tone: {request.caption_style or "engaging"}
+
+{"Include 5-10 relevant hashtags at the end" if request.include_hashtags else "Do not include hashtags"}
+
+Return the caption text only."""
+                
+                caption_response = await openai_service.client.chat.completions.create(
+                    model=openai_service.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are an expert social media marketer who creates compelling, engaging captions that drive engagement and conversions."
+                        },
+                        {
+                            "role": "user",
+                            "content": caption_prompt
+                        }
+                    ],
+                    temperature=0.8,
+                    max_tokens=300
+                )
+                
+                generated_text = caption_response.choices[0].message.content.strip()
+                
+                # Extract hashtags if included
+                if request.include_hashtags:
+                    lines = generated_text.split('\n')
+                    caption_lines = []
+                    hashtag_lines = []
+                    
+                    for line in lines:
+                        if line.strip().startswith('#'):
+                            hashtag_lines.append(line.strip())
+                        else:
+                            caption_lines.append(line)
+                    
+                    caption = '\n'.join(caption_lines).strip()
+                    hashtags = [tag.strip('#') for tag in hashtag_lines if tag.strip().startswith('#')]
+                    
+                    # If hashtags weren't separated, try to extract them
+                    if not hashtags and '#' in generated_text:
+                        import re
+                        hashtags = re.findall(r'#(\w+)', generated_text)
+                        caption = re.sub(r'#\w+\s*', '', generated_text).strip()
+                else:
+                    caption = generated_text
+                
+                print(f"[API] ✓ Caption generated ({len(caption)} chars)")
+                if hashtags:
+                    print(f"[API] ✓ Extracted {len(hashtags)} hashtags")
+            except Exception as e:
+                print(f"[API] ⚠️ Failed to generate caption with AI: {e}")
+                caption = f"Check out our latest content about {request.topic}! 🚀"
+                if request.include_hashtags:
+                    hashtags = [request.topic.lower().replace(' ', '')]
+        else:
+            # Fallback caption
+            caption = f"Exciting news about {request.topic}! Stay tuned for more updates. 🎉"
+            if request.include_hashtags:
+                hashtags = [request.topic.lower().replace(' ', ''), "marketing", "business"]
+        
+        # Combine caption and hashtags
+        full_caption = caption
+        if hashtags:
+            hashtag_string = ' '.join([f"#{tag}" for tag in hashtags])
+            full_caption = f"{caption}\n\n{hashtag_string}"
+        
+        # Step 4: Save post to Hyperspell memory (for all users, including anonymous)
+        if hyperspell_service.is_available():
+            print(f"[API] 💾 Saving post to Hyperspell memory (User: {user_id})...")
+            post_data = {
+                "topic": request.topic,
+                "caption": caption,
+                "hashtags": hashtags,
+                "image_prompt": image_prompt,
+                "created_at": datetime.now().isoformat(),
+                "post_id": None,  # Will be updated if posted
+                "post_url": None,  # Will be updated if posted
+                "is_first_post": is_first,
+                "performance": {},  # Will be updated when performance data is available
+                "caption_style": request.caption_style or "engaging",
+                "aspect_ratio": request.aspect_ratio or "1:1"
+            }
+            
+            resource_id = await save_post_to_memory(
+                hyperspell_service=hyperspell_service,
+                user_id=user_id,
+                post_data=post_data,
+                collection="user_posts"
+            )
+            
+            if resource_id:
+                print(f"[API] ✓ Post saved to Hyperspell memory: {resource_id}")
+            else:
+                print(f"[API] ⚠️ Failed to save post to Hyperspell memory")
+        else:
+            print(f"[API] ⚠️ Hyperspell not available, post not saved to memory")
+        
+        # Step 5: Optionally post to Instagram (using browser automation)
+        post_id = None
+        post_url = None
+        post_error = None
+        
+        if request.post_to_instagram:
+            print(f"[API] 📱 Posting to Instagram...")
+            try:
+                if not request.instagram_username or not request.instagram_password:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Instagram username and password required for posting"
+                    )
+                
+                # Convert base64 image to file if needed
+                image_data = None
+                if image_result.get("image_base64"):
+                    import base64
+                    image_data = base64.b64decode(image_result["image_base64"])
+                elif image_result.get("image_url"):
+                    # Download image
+                    image_data = await image_generation_service.download_image(image_result["image_url"])
+                
+                if not image_data:
+                    raise HTTPException(status_code=500, detail="Could not get image data for posting")
+                
+                # Save to temp file
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+                    temp_file.write(image_data)
+                    temp_image_path = temp_file.name
+                
+                try:
+                    # Use browser automation service (adapted for images)
+                    # Note: Browser automation currently supports videos, but we can adapt it
+                    # For now, we'll return the image and caption, and note that manual posting is recommended
+                    print(f"[API] ⚠️ Automatic image posting requires browser automation update")
+                    print(f"[API]   Image saved to: {temp_image_path}")
+                    print(f"[API]   Please post manually or use Instagram's web interface")
+                    post_error = "Automatic image posting not yet implemented. Please download the image and post manually."
+                finally:
+                    # Keep temp file for user to download/post manually
+                    # Don't delete it immediately
+                    pass
+            except Exception as e:
+                post_error = str(e)
+                print(f"[API] ❌ Instagram posting error: {e}")
+        
+        # Update post in memory if it was posted
+        if post_id and hyperspell_service.is_available():
+            # Note: In a real implementation, you'd update the existing memory
+            # For now, we save it initially and could update later when performance data comes in
+            pass
+        
+        return MarketingPostResponse(
+            success=True,
+            image_url=image_result.get("image_url"),
+            image_base64=image_result.get("image_base64"),
+            image_prompt=image_prompt,
+            caption=caption,
+            hashtags=hashtags if request.include_hashtags else None,
+            full_caption=full_caption,
+            post_id=post_id,
+            post_url=post_url,
+            error=post_error,
+            is_first_post=is_first
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Marketing post creation error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/marketing-post/update-performance")
+async def update_post_performance(
+    post_id: str = Form(...),
+    views: Optional[int] = Form(None),
+    likes: Optional[int] = Form(None),
+    comments: Optional[int] = Form(None),
+    shares: Optional[int] = Form(None),
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Update performance metrics for a post.
+    This allows the system to learn from which posts perform well.
+    """
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        user_id = current_user.email
+        
+        if not hyperspell_service.is_available():
+            return {"success": False, "message": "Hyperspell not available"}
+        
+        # Calculate engagement rate if we have the data
+        engagement_rate = 0.0
+        if views and views > 0:
+            total_engagement = (likes or 0) + (comments or 0) + (shares or 0)
+            engagement_rate = total_engagement / views
+        
+        # Search for the post in Hyperspell memory
+        search_result = await hyperspell_service.query_memories(
+            user_id=user_id,
+            query=f"post_id {post_id} marketing post",
+            max_results=5
+        )
+        
+        if not search_result or not search_result.get("results"):
+            # Try to find by topic or caption if post_id not found
+            print(f"[API] Post ID not found, searching by content...")
+            return {"success": False, "message": "Post not found in memory"}
+        
+        # Update the post memory with performance data
+        performance_data = {
+            "views": views or 0,
+            "likes": likes or 0,
+            "comments": comments or 0,
+            "shares": shares or 0,
+            "engagement_rate": engagement_rate,
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        # Save updated performance as a new memory entry (Hyperspell doesn't support updates directly)
+        performance_memory = f"""Post Performance Update
+
+Post ID: {post_id}
+Views: {views or 0}
+Likes: {likes or 0}
+Comments: {comments or 0}
+Shares: {shares or 0}
+Engagement Rate: {engagement_rate:.4f} ({engagement_rate*100:.2f}%)
+Updated: {datetime.now().isoformat()}
+
+Performance Data:
+{json.dumps(performance_data, indent=2)}
+"""
+        
+        result = await hyperspell_service.add_text_memory(
+            user_id=user_id,
+            text=performance_memory,
+            collection="post_performance"
+        )
+        
+        if result:
+            print(f"[API] ✓ Post performance updated in Hyperspell: {post_id}")
+            return {
+                "success": True,
+                "message": "Performance metrics saved",
+                "engagement_rate": engagement_rate
+            }
+        else:
+            return {"success": False, "message": "Failed to save performance metrics"}
+        
+    except Exception as e:
+        print(f"[API] Error updating post performance: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/linkedin/scrape-and-score")
+async def scrape_and_score_linkedin_posts(
+    keyword: Optional[str] = None,
+    limit: int = 20,
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Scrape LinkedIn posts by keyword, score them, and save to Hyperspell.
+    High-scoring posts will be used to generate better suggestions.
+    """
+    try:
+        print(f"[API] 🔍 Scraping LinkedIn posts for keyword: {keyword or 'trending'}")
+        
+        # Scrape posts
+        if keyword:
+            posts = await linkedin_scraper.scrape_posts_by_keyword(keyword, limit=limit)
+        else:
+            posts = await linkedin_scraper.scrape_trending_posts(limit=limit)
+        
+        if not posts:
+            return {"success": False, "message": "No posts found", "posts": []}
+        
+        # Save to Hyperspell if available
+        saved_count = 0
+        if hyperspell_service.is_available():
+            user_id = current_user.email if current_user else "anonymous_user"
+            
+            for post in posts:
+                try:
+                    # Format post data for Hyperspell
+                    post_memory = f"""LinkedIn Scored Post - Score: {post['score']}/100
+
+Post ID: {post['post_id']}
+Content: {post['content']}
+Author: {post['author']}
+Post URL: {post['post_url']}
+Keyword: {keyword or 'trending'}
+
+Engagement Metrics:
+- Likes: {post['likes']}
+- Comments: {post['comments']}
+- Shares: {post['shares']}
+- Views: {post.get('views', 0)}
+- Engagement Rate: {post.get('engagement_rate', 0)}%
+- Total Engagement: {post.get('total_engagement', 0)}
+- Score: {post['score']}/100
+
+Hashtags: {', '.join(post.get('hashtags', []))}
+Industry: {post.get('industry', 'N/A')}
+Posted At: {post.get('posted_at', 'N/A')}
+Scraped At: {post.get('scraped_at', datetime.now().isoformat())}
+
+Full Data:
+{json.dumps(post, indent=2)}
+"""
+                    
+                    result = await hyperspell_service.add_text_memory(
+                        user_id=user_id,
+                        text=post_memory,
+                        collection="linkedin_scored_posts"
+                    )
+                    
+                    if result:
+                        saved_count += 1
+                except Exception as e:
+                    print(f"[API] ⚠️ Failed to save post {post.get('post_id')}: {e}")
+        
+        print(f"[API] ✓ Scraped {len(posts)} posts, saved {saved_count} to Hyperspell")
+        
+        return {
+            "success": True,
+            "message": f"Scraped {len(posts)} posts, saved {saved_count} to memory",
+            "posts": posts,
+            "top_score": posts[0]["score"] if posts else 0
+        }
+        
+    except Exception as e:
+        print(f"[API] Error scraping LinkedIn posts: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/marketing-post/suggestions", response_model=MarketingPostSuggestionsResponse)
+async def get_marketing_post_suggestions(
+    current_user: Optional[User] = Depends(get_current_user),
+    count: int = 5
+):
+    """
+    Get AI-generated marketing post topic suggestions based on Hyperspell memory context.
+    Uses user's uploaded documents and memories to suggest relevant, personalized topics.
+    """
+    try:
+        print(f"[API] 💡 Generating marketing post suggestions...")
+        
+        if not openai_service:
+            raise HTTPException(
+                status_code=503,
+                detail="OpenAI service is not available. Please set OPENAI_API_KEY environment variable."
+            )
+        
+        # Get user context from Hyperspell memories (documents are stored in memories)
+        user_id = current_user.email if current_user else "anonymous_user"
+        user_context = ""
+        post_performance_context = ""
+        
+        # Always try to get ALL context from Hyperspell memories if user is logged in
+        # This includes documents, competitors, previously generated posts, user context, etc.
+        # Run queries in parallel to speed up response time
+        user_context = ""
+        post_performance_context = ""
+        linkedin_posts_context = ""
+        high_scoring_posts = []
+        
+        if hyperspell_service.is_available() and current_user:
+            print(f"[API] Getting ALL Hyperspell memories for user: {current_user.email}")
+            
+            # Run all Hyperspell queries in parallel for faster response
+            import asyncio
+            tasks = []
+            
+            # Task 1: Get all memories
+            tasks.append(hyperspell_service.get_all_memories_context(current_user.email))
+            
+            # Task 2: Get post performance context
+            tasks.append(get_post_performance_context(
+                hyperspell_service=hyperspell_service,
+                user_id=current_user.email
+            ))
+            
+            # Task 3: Get LinkedIn posts
+            async def get_linkedin_posts():
+                try:
+                    return await hyperspell_service.query_memories(
+                        user_id=current_user.email,
+                        query="LinkedIn Scored Post high score engagement metrics",
+                        max_results=10
+                    )
+                except Exception as e:
+                    print(f"[API] ⚠️ Error fetching LinkedIn posts: {e}")
+                    return None
+            tasks.append(get_linkedin_posts())
+            
+            # Run all queries in parallel
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Extract results
+            user_context = results[0] if not isinstance(results[0], Exception) else ""
+            post_performance_context = results[1] if not isinstance(results[1], Exception) else ""
+            linkedin_search = results[2] if not isinstance(results[2], Exception) else None
+            
+            if user_context:
+                print(f"[API] ✓ Retrieved all user memories ({len(user_context)} chars)")
+            else:
+                print(f"[API] ⚠️ No memories found in Hyperspell for user: {current_user.email}")
+                print(f"[API] This might mean:")
+                print(f"[API]   1. No documents/competitors/posts have been added to Hyperspell")
+                print(f"[API]   2. Items were added but not indexed yet")
+                print(f"[API]   3. The user_id doesn't match (stored vs queried)")
+            
+            # Process LinkedIn posts if found
+            if linkedin_search and linkedin_search.get("results") and isinstance(linkedin_search.get("results"), list):
+                results = linkedin_search.get("results", [])
+                for result in results:
+                    if isinstance(result, dict):
+                        content = result.get("content", result.get("text", ""))
+                        # Extract score from content
+                        score_match = re.search(r'Score: ([\d.]+)/100', content)
+                        if score_match:
+                            score = float(score_match.group(1))
+                            # Only include posts with score > 50
+                            if score >= 50:
+                                # Extract content snippet
+                                content_match = re.search(r'Content: (.+?)(?:\n|$)', content)
+                                content_text = content_match.group(1) if content_match else ""
+                                
+                                high_scoring_posts.append({
+                                    "score": score,
+                                    "content": content_text[:200] + "..." if len(content_text) > 200 else content_text
+                                })
+                
+                # Sort by score and take top 5
+                high_scoring_posts.sort(key=lambda x: x["score"], reverse=True)
+                high_scoring_posts = high_scoring_posts[:5]
+                
+                if high_scoring_posts:
+                    linkedin_posts_context = "HIGH-SCORING LINKEDIN POSTS (use these as inspiration):\n"
+                    for i, post in enumerate(high_scoring_posts, 1):
+                        linkedin_posts_context += f"{i}. Score: {post['score']}/100 - {post['content']}\n"
+                    print(f"[API] ✓ Found {len(high_scoring_posts)} high-scoring LinkedIn posts")
+        
+        # Build prompt for generating suggestions
+        context_section = ""
+        if user_context:
+            context_section = f"""
+USER CONTEXT (ALL Hyperspell memories - includes uploaded documents, competitors, previously generated posts, brand guidelines, business information, and any other stored context):
+{user_context}
+
+CRITICAL: Use ALL of this context to create highly personalized and relevant marketing post suggestions. Reference specific details from:
+- Uploaded documents and brand context
+- Competitor information
+- Previously generated posts and their performance
+- Any other stored memories
+
+Make suggestions that align with the user's actual brand, business, competitors, and content history."""
+        else:
+            context_section = """
+No user context found in Hyperspell memories. Suggest general marketing post topics that are versatile and engaging."""
+        
+        performance_section = ""
+        if post_performance_context:
+            performance_section = f"""
+POST PERFORMANCE CONTEXT (learn from what worked):
+{post_performance_context}
+
+Use insights from high-performing posts to suggest similar topics that are likely to perform well."""
+        
+        linkedin_section = ""
+        if linkedin_posts_context:
+            linkedin_section = f"""
+{linkedin_posts_context}
+
+IMPORTANT: Base your suggestions on these high-scoring LinkedIn posts. Extract key themes, topics, and content styles that made these posts successful. Each suggestion should be inspired by these high-performing posts and include a score estimate (0-100) based on how similar it is to the high-scoring posts."""
+        
+        suggestions_prompt = f"""Generate {count} creative and engaging marketing post topic suggestions for social media (Instagram, LinkedIn, Twitter).
+
+{context_section}
+{performance_section}
+{linkedin_section}
+
+Requirements:
+- Each suggestion should be specific, actionable, and engaging
+- Topics should be suitable for visual marketing posts
+- CRITICAL: If user context is provided above, you MUST use ALL of it to create personalized suggestions
+- Reference specific details from: uploaded documents, competitors, previously generated posts, brand information, business context
+- If performance data is available, prioritize topics similar to high-performing posts
+- Include a brief explanation of why each topic is relevant, specifically referencing the user's actual context (documents, competitors, posts, etc.)
+- Make suggestions diverse (mix of product highlights, tips, behind-the-scenes, educational content, competitor-inspired content, etc.)
+- Each topic should be 5-15 words
+- The "context" field should explain how the suggestion relates to the user's actual context from their Hyperspell memories (documents, competitors, posts, etc.)
+
+Return the suggestions in this JSON format:
+{{
+  "suggestions": [
+    {{
+      "topic": "Topic suggestion here",
+      "context": "Why this is relevant based on the user's brand context from Hyperspell memories (which includes uploaded documents, brand guidelines, and business information)",
+      "reasoning": "Brief explanation of why this topic would work well",
+      "score": 85.5,
+      "source": "linkedin_scored"
+    }}
+  ]
+}}
+
+IMPORTANT FOR CONTEXT FIELD:
+- If user context is provided above, ALWAYS reference specific details from ALL memories in the "context" field
+- Mention specific elements from: uploaded documents, competitors, previously generated posts, brand information, business details
+- Reference competitor names, document topics, post themes, or other specific details from the memories
+- If no context is available, you can say "General marketing topic" but prefer to use context when available
+- The context field should show HOW the suggestion relates to the user's actual memories (documents, competitors, posts, etc.)
+
+IMPORTANT: 
+- If high-scoring LinkedIn posts are provided, base suggestions on those and set source to "linkedin_scored"
+- Include a score (0-100) for each suggestion based on similarity to high-scoring posts
+- If no LinkedIn posts available, set source to "ai_generated" and estimate score based on topic quality
+
+Return ONLY valid JSON, no additional text."""
+
+        try:
+            response = await openai_service.client.chat.completions.create(
+                model=openai_service.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert social media marketer who creates highly relevant, personalized marketing post topics based on user context and brand information."
+                    },
+                    {
+                        "role": "user",
+                        "content": suggestions_prompt
+                    }
+                ],
+                temperature=0.8,
+                max_tokens=1000,
+                response_format={"type": "json_object"}
+            )
+            
+            import json
+            suggestions_data = json.loads(response.choices[0].message.content)
+            
+            # Validate and format suggestions
+            suggestions_list = suggestions_data.get("suggestions", [])
+            if not suggestions_list:
+                # Fallback: generate simple suggestions
+                suggestions_list = [
+                    {"topic": "Product launch announcement", "context": "General marketing topic", "reasoning": "Effective for building excitement"},
+                    {"topic": "Behind-the-scenes company culture", "context": "General marketing topic", "reasoning": "Builds brand authenticity"},
+                    {"topic": "Customer success story", "context": "General marketing topic", "reasoning": "Social proof and engagement"},
+                    {"topic": "Industry tips and best practices", "context": "General marketing topic", "reasoning": "Educational content drives engagement"},
+                    {"topic": "Company values and mission", "context": "General marketing topic", "reasoning": "Builds brand connection"}
+                ]
+            
+            # Limit to requested count
+            suggestions_list = suggestions_list[:count]
+            
+            # Convert to Pydantic models
+            suggestions = []
+            for s in suggestions_list:
+                # If we have high-scoring posts, try to match score
+                score = s.get("score")
+                if not score and high_scoring_posts:
+                    # Estimate score based on similarity to high-scoring posts
+                    # Simple heuristic: if topic matches keywords from high-scoring posts
+                    topic_lower = s.get("topic", "").lower()
+                    avg_score = sum(p["score"] for p in high_scoring_posts) / len(high_scoring_posts)
+                    # If topic seems related, use average score, otherwise lower
+                    if any(keyword in topic_lower for keyword in ["ai", "business", "leadership", "innovation", "technology"]):
+                        score = avg_score * 0.9
+                    else:
+                        score = avg_score * 0.7
+                
+                suggestions.append(
+                    MarketingPostSuggestion(
+                        topic=s.get("topic", ""),
+                        context=s.get("context"),
+                        reasoning=s.get("reasoning"),
+                        score=round(score, 2) if score else None,
+                        source=s.get("source", "linkedin_scored" if high_scoring_posts else "ai_generated")
+                    )
+                )
+            
+            print(f"[API] ✓ Generated {len(suggestions)} marketing post suggestions")
+            
+            return MarketingPostSuggestionsResponse(
+                suggestions=suggestions,
+                user_context_used=user_context[:200] + "..." if user_context and len(user_context) > 200 else user_context
+            )
+            
+        except json.JSONDecodeError as e:
+            print(f"[API] ⚠️ Failed to parse suggestions JSON: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to generate suggestions. Please try again."
+            )
+        except Exception as e:
+            print(f"[API] ⚠️ Error generating suggestions: {e}")
+            import traceback
+            traceback.print_exc()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to generate suggestions: {str(e)}"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Marketing post suggestions error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2257,9 +3404,33 @@ async def create_informational_video(request: InformationalVideoRequest):
                 "profile_pic_url": ""
             }
         
-        # Step 2: Research profile context using AI (works even with minimal context)
+        # Step 2: Get document context if provided
+        document_context = ""
+        if request.document_ids and len(request.document_ids) > 0:
+            print(f"[API] 📄 Retrieving context from {len(request.document_ids)} document(s)...")
+            try:
+                document_context = document_service.get_documents_context(request.document_ids)
+                print(f"[API] ✓ Document context retrieved ({len(document_context)} characters)")
+            except Exception as doc_error:
+                print(f"[API] ⚠️ Error retrieving document context: {doc_error}")
+                document_context = ""
+        
+        # Step 3: Research profile context using AI (works even with minimal context)
         print(f"[API] 🤖 Analyzing profile context with AI...")
-        page_context_summary = await openai_service.research_profile_context(profile_context)
+        page_context_summary = await openai_service.research_profile_context(profile_context, document_context)
+        
+        # Step 3.5: Enhance with Hyperspell memory context (reusable helper)
+        memory_query = f"{request.username} {profile_context.get('biography', '')[:100]} {document_context[:100] if document_context else ''}".strip()
+        if memory_query:
+            hyperspell_context = await get_hyperspell_context(
+                hyperspell_service=hyperspell_service,
+                query=memory_query,
+                user_email=None
+            )
+            if hyperspell_context:
+                page_context_summary = f"""{hyperspell_context}
+
+{page_context_summary}"""
         
         # If AI research also fails, use username as fallback
         if not page_context_summary or len(page_context_summary.strip()) < 10:
@@ -2501,11 +3672,22 @@ Return a JSON object with:
                 detail="Veo 3 is required for informational videos. Please configure GOOGLE_CLOUD_PROJECT_ID."
             )
         
+        # Validate Veo 3 duration constraints (4-60 seconds)
+        target_duration = request.target_duration or 8
+        veo3_duration = max(4, min(60, target_duration))
+        if veo3_duration != target_duration:
+            print(f"[API] ⚠️ Veo 3 duration adjusted from {target_duration}s to {veo3_duration}s (must be 4-60 seconds)")
+        
+        # Guardrail: Warn if duration is very long (may take significant time)
+        if veo3_duration > 30:
+            print(f"[API] ⚠️ Veo 3 generation with {veo3_duration}s duration may take 3-5 minutes")
+        
         try:
             print(f"[API] 🎬 Generating video with Veo 3...")
+            print(f"[API]   Duration: {veo3_duration}s (Veo 3 supports 4-60 seconds)")
             veo3_result = await veo3_service.generate_video(
                 prompt=video_script,
-                duration=request.target_duration,
+                duration=veo3_duration,
                 resolution="1280x720",
                 image_urls=image_urls[:1] if image_urls else None  # Use only 1 image
             )
@@ -2542,6 +3724,1047 @@ Return a JSON object with:
     except Exception as e:
         import traceback
         traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/documents/upload")
+async def upload_document(file: UploadFile = File(...)):
+    """Upload and process a document (PDF, DOCX, TXT)"""
+    try:
+        # Validate file type
+        allowed_types = [
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'text/plain'
+        ]
+        
+        if file.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File type not supported. Allowed types: PDF, DOC, DOCX, TXT"
+            )
+        
+        # Read file content
+        file_content = await file.read()
+        
+        # Validate file size (10MB limit)
+        max_size = 10 * 1024 * 1024
+        if len(file_content) > max_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File size exceeds {max_size / (1024 * 1024)}MB limit"
+            )
+        
+        # Save and process document
+        result = await document_service.save_document(
+            file_content=file_content,
+            filename=file.filename,
+            content_type=file.content_type
+        )
+        
+        return result
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Document upload error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/documents")
+async def list_documents():
+    """List all uploaded documents"""
+    try:
+        documents = document_service.get_all_documents()
+        return {"documents": documents}
+    except Exception as e:
+        print(f"[API] Error listing documents: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/documents/{document_id}")
+async def get_document(document_id: str):
+    """Get document metadata and text content"""
+    try:
+        document = document_service.get_document(document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return document
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error getting document: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/documents/{document_id}/text")
+async def get_document_text(document_id: str):
+    """Get just the text content of a document"""
+    try:
+        text = document_service.get_document_text(document_id)
+        if text is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return {"text": text}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error getting document text: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/competitors/find")
+async def find_competitors(request: FindCompetitorsRequest):
+    """
+    Find competitors based on brand context document.
+    Analyzes the document to understand the brand and suggests relevant competitors.
+    """
+    try:
+        document_id = request.document_id
+        
+        # Get document text
+        document_text = document_service.get_document_text(document_id)
+        if not document_text:
+            raise HTTPException(status_code=404, detail="Document not found or has no text content")
+        
+        if not openai_service:
+            raise HTTPException(
+                status_code=400,
+                detail="OpenAI API key is required for competitor analysis. Please set OPENAI_API_KEY in your backend/.env file."
+            )
+        
+        print(f"[API] Finding competitors based on document: {document_id}")
+        print(f"[API] Document text length: {len(document_text)} characters")
+        
+        # Use OpenAI to analyze brand context and find competitors
+        prompt = f"""Based on the following brand context document, identify and suggest relevant competitors that this brand would be trying to beat or learn from.
+
+BRAND CONTEXT DOCUMENT:
+{document_text[:8000]}  # Limit to 8000 chars to avoid token limits
+
+Your task:
+1. Analyze the brand's industry, target audience, products/services, and positioning
+2. Identify 5-10 relevant competitors that:
+   - Operate in the same or similar space
+   - Target similar audiences
+   - Offer similar products/services
+   - Would be direct or indirect competitors
+3. For each competitor, provide:
+   - Company/brand name
+   - Brief reason why they're a competitor (1-2 sentences)
+   - Platform handles if relevant (Instagram, LinkedIn, etc.)
+
+Return your response as a JSON array of objects with this structure:
+[
+  {{
+    "name": "Competitor Name",
+    "reason": "Why this is a relevant competitor",
+    "platforms": ["instagram_handle", "linkedin_handle"]
+  }}
+]
+
+Focus on competitors that would be valuable to analyze and learn from. Be specific and actionable."""
+
+        # Call OpenAI to find competitors
+        response = await openai_service.client.chat.completions.create(
+            model=openai_service.model,
+            messages=[
+                {"role": "system", "content": "You are an expert market researcher who identifies competitors based on brand context. Return only valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=2000
+        )
+        
+        # Parse the response
+        response_text = response.choices[0].message.content.strip()
+        
+        # Try to extract JSON from the response (might be wrapped in markdown code blocks)
+        # Remove markdown code blocks if present
+        json_match = re.search(r'```(?:json)?\s*(\[.*?\])\s*```', response_text, re.DOTALL)
+        if json_match:
+            response_text = json_match.group(1)
+        else:
+            # Try to find JSON array directly
+            json_match = re.search(r'(\[.*\])', response_text, re.DOTALL)
+            if json_match:
+                response_text = json_match.group(1)
+        
+        competitors = json.loads(response_text)
+        
+        # Validate and format the response
+        if not isinstance(competitors, list):
+            raise ValueError("Response is not a list")
+        
+        # Limit to 10 competitors
+        competitors = competitors[:10]
+        
+        print(f"[API] Found {len(competitors)} competitors")
+        
+        return {
+            "competitors": competitors,
+            "document_id": document_id
+        }
+        
+    except json.JSONDecodeError as e:
+        print(f"[API] JSON decode error: {str(e)}")
+        print(f"[API] Response text: {response_text[:500]}")
+        raise HTTPException(status_code=500, detail=f"Failed to parse competitor analysis: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error finding competitors: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to find competitors: {str(e)}")
+
+
+@app.delete("/api/documents/{document_id}")
+async def delete_document(document_id: str):
+    """Delete a document"""
+    try:
+        success = document_service.delete_document(document_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return {"status": "success", "message": "Document deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error deleting document: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/documents/context")
+async def get_documents_context(document_ids: List[str]):
+    """Get combined text context from multiple documents"""
+    try:
+        context = document_service.get_documents_context(document_ids)
+        return {"context": context}
+    except Exception as e:
+        print(f"[API] Error getting documents context: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/video/options", response_model=VideoOptionsResponse)
+async def get_video_options(request: VideoOptionsRequest):
+    """
+    Generate multiple video options from documents for user to choose from.
+    Context is handled by frontend localStorage.
+    """
+    try:
+        if not openai_service:
+            raise HTTPException(
+                status_code=400,
+                detail="OpenAI API key required. Please set OPENAI_API_KEY in your backend/.env file."
+            )
+        
+        print(f"[API] Generating {request.num_options} video options from {len(request.document_ids)} document(s)")
+        
+        # Get document context
+        document_context = document_service.get_documents_context(request.document_ids)
+        if not document_context or len(document_context.strip()) < 50:
+            raise HTTPException(
+                status_code=400,
+                detail="Documents appear to be empty or could not be processed."
+            )
+        
+        # Enhance with Hyperspell memory context (reusable helper)
+        memory_query = document_context[:200] if document_context else ""
+        hyperspell_context = await get_hyperspell_context(
+            hyperspell_service=hyperspell_service,
+            query=memory_query,
+            user_email=None
+        )
+        if hyperspell_context:
+            document_context = f"""{hyperspell_context}
+
+{document_context}"""
+            print(f"[API] ✓ Enhanced document context with Hyperspell memories")
+        
+        # Generate video options with video model
+        video_model = getattr(request, 'video_model', 'sora-2') or 'sora-2'
+        print(f"[API] Generating video options with model: {video_model}")
+        options = await openai_service.generate_video_options(
+            document_context=document_context,
+            num_options=request.num_options or 3,
+            video_model=video_model
+        )
+        
+        print(f"[API] Context handled by frontend localStorage")
+        
+        return {"options": options}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error generating video options: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/video/from-documents", response_model=DocumentVideoResponse)
+async def create_video_from_documents(request: DocumentVideoRequest):
+    """
+    Create marketing videos from uploaded documents.
+    Uses document content as context to generate personalized marketing videos.
+    """
+    try:
+        if not openai_service:
+            raise HTTPException(
+                status_code=400,
+                detail="OpenAI API key required for video generation. Please set OPENAI_API_KEY in your backend/.env file."
+            )
+        
+        print(f"[API] Creating marketing video from {len(request.document_ids)} document(s)")
+        if request.topic:
+            print(f"[API] Topic (user-specified): {request.topic}")
+        else:
+            print(f"[API] Topic: AI will decide based on document content")
+        if request.duration:
+            print(f"[API] Duration (user-specified): {request.duration} seconds")
+        else:
+            print(f"[API] Duration: AI will decide optimal duration")
+        
+        # Step 1: Get document context
+        print(f"[API] 📄 Retrieving context from documents...")
+        try:
+            document_context = document_service.get_documents_context(request.document_ids)
+            print(f"[API] ✓ Document context retrieved ({len(document_context)} characters)")
+        except Exception as doc_error:
+            print(f"[API] ⚠️ Error retrieving document context: {doc_error}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to retrieve document context: {str(doc_error)}"
+            )
+        
+        if not document_context or len(document_context.strip()) < 50:
+            raise HTTPException(
+                status_code=400,
+                detail="Documents appear to be empty or could not be processed. Please ensure your documents contain readable text."
+            )
+        
+        # Get Hyperspell memory context for enhanced personalization (reusable helper)
+        memory_query = f"{request.topic or ''} {document_context[:200] if document_context else ''}".strip()
+        hyperspell_context = await get_hyperspell_context(
+            hyperspell_service=hyperspell_service,
+            query=memory_query,
+            user_email=None  # Can add user auth later
+        )
+        user_context_summary = hyperspell_context  # Use Hyperspell context
+        
+        # Step 1.6: Enhance document context with Hyperspell memory (reusable helper)
+        if hyperspell_context:
+            document_context = f"""{hyperspell_context}
+
+{document_context}"""
+            print(f"[API] ✓ Enhanced document context with Hyperspell memories ({len(hyperspell_context)} chars)")
+        
+        # Step 1.5: Web research - Extract companies and research them
+        web_research_context = ""
+        try:
+            print(f"[API] 🔍 Starting web research for companies in documents...")
+            research_data = await web_research_service.research_companies_from_document(document_context)
+            
+            if research_data.get("companies_found"):
+                main_company = research_data.get("main_company")
+                if main_company:
+                    print(f"[API] ✓ Found {len(research_data['companies_found'])} companies")
+                    print(f"[API] 🎯 Main company identified: {main_company} (user's company)")
+                else:
+                    print(f"[API] ✓ Found {len(research_data['companies_found'])} companies: {', '.join(research_data['companies_found'][:3])}")
+                
+                web_research_context = web_research_service.format_research_for_ai(research_data)
+                print(f"[API] 📊 Web research context: {len(web_research_context)} characters")
+            else:
+                print(f"[API] ℹ️ No companies found in documents for web research")
+        except Exception as web_error:
+            print(f"[API] ⚠️ Web research error (continuing without it): {web_error}")
+            import traceback
+            traceback.print_exc()
+        
+        # Combine document context with web research
+        if web_research_context:
+            document_context = f"{document_context}\n\n{web_research_context}"
+            print(f"[API] ✓ Enhanced document context with web research (total: {len(document_context)} chars)")
+        
+        # Note: Hyperspell context was already added earlier in the function
+        # Context is handled by frontend localStorage
+        print(f"[API] Context will be saved in frontend localStorage")
+        
+        # Step 2: Generate video options first (if not already chosen)
+        video_options = None
+        if not request.topic and not request.duration:  # If user hasn't specified, generate options
+            try:
+                print(f"[API] 📋 Generating video options for user selection...")
+                video_options = await openai_service.generate_video_options(
+                    document_context=document_context,
+                    num_options=3
+                )
+                print(f"[API] ✓ Generated {len(video_options)} video options")
+            except Exception as options_error:
+                print(f"[API] ⚠️ Could not generate options, proceeding with single script: {options_error}")
+        
+        # Check if script is pre-approved (user has already reviewed and approved it)
+        video_model = request.video_model or "sora-2"
+        print(f"[API] 📹 Video model from request: {request.video_model}")
+        print(f"[API] 📹 Selected video model: {video_model}")
+        print(f"[API] 📹 Script approved: {request.approved}")
+        
+        # Initialize script_result to avoid NameError
+        script_result = None
+        video_script = None
+        sora_prompt = None
+        linkedin_optimization = ""
+        key_insights = ""
+        document_analysis = ""
+        
+        if request.approved and request.script:
+            # User has approved the script - skip generation and go straight to video
+            print(f"[API] ✓ Using pre-approved script ({len(request.script)} characters)")
+            video_script = request.script
+            sora_prompt = request.script  # Use script as prompt
+            # Create minimal script_result for approved scripts
+            script_result = {
+                "script": request.script,
+                "sora_prompt": request.script,
+                "ai_decisions": {
+                    "duration": request.duration or (60 if (video_model == "veo-3" or video_model == "veo3") else 8),
+                    "topic": request.topic or "Professional Content",
+                    "audience": request.target_audience or "Professional Audience"
+                },
+                "linkedin_optimization": "",
+                "key_insights": "",
+                "document_analysis": ""
+            }
+        else:
+            # Step 3: Generate LinkedIn-optimized video script from document context
+            # Note: document_context already includes Hyperspell context from earlier in the function
+            platform = request.platform or "linkedin"
+            print(f"[API] 📝 Generating {platform.upper()}-optimized video script from document context...")
+            print(f"[API] 📊 Using deep document analysis with {len(document_context)} characters of context (includes Hyperspell memories)")
+            
+            try:
+                # Determine optimal duration based on video model
+                # For Veo 3, AI can choose any duration 4-60 seconds based on content needs
+                # For Sora 2, must be 4, 8, or 12 seconds
+                video_model_for_script = request.video_model or "sora-2"
+                
+                # If Veo 3 and no duration specified, let AI decide optimal duration (4-60 seconds)
+                # If Sora 2 and no duration specified, AI must choose from 4, 8, or 12 seconds
+                duration_for_script = request.duration
+                if not duration_for_script:
+                    if video_model_for_script == "veo-3" or video_model_for_script == "veo3":
+                        print(f"[API] 📏 Veo 3 selected - AI will determine optimal duration (4-60 seconds) based on content complexity")
+                    else:
+                        print(f"[API] 📏 Sora 2 selected - AI will determine optimal duration (4, 8, or 12 seconds only)")
+                
+                # Use the new LinkedIn-optimized script generation method with user context
+                script_result = await openai_service.generate_linkedin_optimized_script(
+                    document_context=document_context,  # Pass full context - method handles optimization
+                    topic=request.topic,
+                    duration=duration_for_script,
+                    target_audience=request.target_audience,
+                    key_message=request.key_message,
+                    video_model=video_model_for_script,  # Pass video model so AI can make appropriate duration decisions
+                    user_context=user_context_summary  # Pass user context for personalization
+                )
+                
+                video_script = script_result["script"]
+                sora_prompt = script_result["sora_prompt"]
+                linkedin_optimization = script_result.get("linkedin_optimization", "")
+                key_insights = script_result.get("key_insights", "")
+                document_analysis = script_result.get("document_analysis", "")
+                
+                print(f"[API] ✓ LinkedIn-optimized script generated ({len(video_script)} characters)")
+                print(f"[API] ✓ Sora prompt optimized ({len(sora_prompt)} characters)")
+            
+            except Exception as script_error:
+                print(f"[API] ⚠️ Script generation error: {str(script_error)}")
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to generate LinkedIn-optimized video script: {str(script_error)}"
+                )
+        
+        # Step 4: Generate video using selected model (Sora or Veo 3) - ONLY if script is approved
+        video_job = None
+        
+        # Only generate video if script is pre-approved
+        if request.approved and request.script:
+            print(f"[API] 🎬 Generating video with {video_model} using approved script...")
+        elif not request.approved:
+            print(f"[API] ⏸️ Script generated. Waiting for user approval before generating video.")
+            print(f"[API]   Selected video model: {video_model} (will be used when script is approved)")
+        
+        if request.approved:
+            try:
+                # Get AI-decided duration from script result, or use provided/default
+                # When script is pre-approved, script_result might be minimal, so handle both cases
+                if script_result and isinstance(script_result, dict):
+                    ai_decisions = script_result.get("ai_decisions", {})
+                else:
+                    ai_decisions = {}
+                # Default duration: 8s for Sora, 60s for Veo 3 (to ensure quality longer videos)
+                default_duration = 60 if (video_model == "veo-3" or video_model == "veo3") else 8
+                video_duration = ai_decisions.get("duration") if ai_decisions else (request.duration or default_duration)
+                
+                print(f"[API] 🔍 Initial video_duration: {video_duration}s (from AI: {ai_decisions.get('duration') if ai_decisions else 'N/A'}, request: {request.duration}, default: {default_duration})")
+                
+                # CRITICAL FOR VEO 3: Force override if duration is 4, 8, or 12 (Sora constraints)
+                # ALWAYS ensure Veo 3 gets at least 50 seconds for quality content
+                if (video_model == "veo-3" or video_model == "veo3"):
+                    original_duration = video_duration
+                    # ALWAYS override to at least 50 seconds for Veo 3
+                    if video_duration in [4, 8, 12]:
+                        print(f"[API] ⚠️ CRITICAL: Duration {video_duration}s is a Sora constraint. FORCING Veo 3 to 50s for quality content.")
+                        video_duration = 50
+                    elif video_duration < 50:  # Changed from 30 to 50 to ensure longer videos
+                        print(f"[API] ⚠️ Duration {video_duration}s is too short for Veo 3. Overriding to 50s for quality content.")
+                        video_duration = 50
+                    elif video_duration > 148:
+                        print(f"[API] ⚠️ Duration {video_duration}s exceeds Veo 3 maximum. Clamping to 148s.")
+                        video_duration = 148
+                    
+                    if original_duration != video_duration:
+                        print(f"[API] ✅ Veo 3 duration OVERRIDDEN: {original_duration}s -> {video_duration}s")
+                    else:
+                        print(f"[API] ✅ Veo 3 duration confirmed: {video_duration}s (no override needed)")
+                
+                if video_model == "veo-3" or video_model == "veo3":
+                    # Use Veo 3 for video generation
+                    if not veo3_service.project_id:
+                        print(f"[API] ⚠️ Veo 3 not configured, falling back to Sora 2")
+                        video_model = "sora-2"
+                    else:
+                        # Validate Veo 3 duration constraints
+                        # Initial generation: 4, 6, or 8 seconds
+                        # Can be extended up to 148 seconds using extension feature
+                        valid_initial_durations = [4, 6, 8]
+                        target_duration = video_duration
+                        
+                        print(f"[API] 🎯 Veo 3 target_duration: {target_duration}s")
+                        
+                        # CRITICAL: After override, target_duration should ALWAYS be >= 50 for Veo 3
+                        # So this should ALWAYS trigger the extension path
+                        # CRITICAL: After override, target_duration should ALWAYS be >= 50 for Veo 3
+                        # So we should ALWAYS use the extension path
+                        if target_duration <= 8:
+                            # This should NEVER happen after the override, but handle it just in case
+                            print(f"[API] ⚠️ WARNING: target_duration is {target_duration}s (should be >= 50 after override)!")
+                            print(f"[API] ⚠️ FORCING to extension path anyway for quality content")
+                            # Force extension path even if target_duration <= 8
+                            veo3_duration = 8
+                            # Calculate extensions needed (even for short videos, extend to at least 15s)
+                            import math
+                            min_target = max(target_duration, 15)  # At least 15 seconds
+                            remaining_seconds = min_target - 8
+                            extension_count = min(20, math.ceil(remaining_seconds / 7))
+                            needs_extension = extension_count > 0
+                            print(f"[API] 📹 Veo 3: Forced extension path - Generating {veo3_duration}s initial video, will extend {extension_count} times (7s each) to reach ~{8 + (extension_count * 7)}s")
+                        else:
+                            # Need extension: start with 8 seconds, then extend
+                            veo3_duration = 8  # Start with maximum initial generation
+                            # Calculate how many 7-second extensions needed
+                            remaining_seconds = target_duration - 8
+                            # Calculate extension count: (remaining_seconds / 7) rounded up, max 20
+                            import math
+                            extension_count = min(20, math.ceil(remaining_seconds / 7))
+                            needs_extension = extension_count > 0
+                            print(f"[API] 📹 Veo 3: Generating {veo3_duration}s initial video, will extend {extension_count} times (7s each) to reach ~{8 + (extension_count * 7)}s")
+                            print(f"[API] 📹 Extension calculation: target={target_duration}s, remaining={remaining_seconds}s, extensions={extension_count}")
+                        
+                        # Guardrail: Warn if duration is very long
+                        if veo3_duration > 30:
+                            print(f"[API] ⚠️ Veo 3 generation with {veo3_duration}s duration may take 3-5 minutes")
+                        
+                        try:
+                            print(f"[API] 🎥 Using Veo 3 for video generation (duration: {veo3_duration}s)")
+                            veo3_result = await veo3_service.generate_video(
+                                prompt=sora_prompt[:2000],  # Veo 3 has prompt length limits
+                                duration=veo3_duration,
+                                resolution="1280x720"
+                            )
+                            
+                            # Store extension metadata for automatic extension after base video completes
+                            if needs_extension and extension_count > 0:
+                                extension_metadata = {
+                                    "needs_extension": needs_extension,
+                                    "extension_count": extension_count,
+                                    "target_duration": target_duration,
+                                    "current_duration": veo3_duration,
+                                    "extensions_completed": 0,
+                                    "original_job_id": veo3_result.get("job_id"),
+                                    "base_job_id": veo3_result.get("job_id")
+                                }
+                                if not hasattr(veo3_service, '_extension_cache'):
+                                    veo3_service._extension_cache = {}
+                                job_id_for_cache = veo3_result.get("job_id")
+                                veo3_service._extension_cache[job_id_for_cache] = extension_metadata
+                                print(f"[API] ✓ Veo 3 video generation started (will auto-extend {extension_count} times after base video completes)")
+                            else:
+                                print(f"[API] ✓ Veo 3 video generation started (no extensions needed)")
+                            
+                            video_job = {
+                                "job_id": veo3_result.get("job_id"),
+                                "status": veo3_result.get("status", "queued"),
+                                "progress": veo3_result.get("progress", 0),
+                                "model": veo3_result.get("model", "veo-3"),
+                                "video_url": veo3_result.get("video_url"),
+                                "created_at": veo3_result.get("created_at", 0),
+                                "needs_extension": needs_extension,
+                                "extension_count": extension_count,
+                                "target_duration": target_duration,
+                                "current_duration": veo3_duration
+                            }
+                            
+                            print(f"[API] ✓ Veo 3 video generation started: {video_job['job_id']}")
+                            if needs_extension and extension_count > 0:
+                                print(f"[API] ✓ Base video generation started (will auto-extend {extension_count} times)")
+                            else:
+                                print(f"[API] ✓ Base video generation started (no extensions needed)")
+                            
+                            # Veo 3 generation successful - return early, don't fall through to Sora
+                            return {
+                                "success": True,
+                                "video_job": video_job,
+                                "script": video_script,
+                                "sora_prompt": sora_prompt,
+                                "linkedin_optimization": linkedin_optimization,
+                                "key_insights": key_insights,
+                                "document_analysis": document_analysis,
+                                "video_options": video_options
+                            }
+                        except Exception as veo3_error:
+                            error_str = str(veo3_error)
+                            # Check if it's a content policy violation
+                            if "Content Policy Violation" in error_str or "violate" in error_str.lower() or "usage guidelines" in error_str.lower():
+                                print(f"[API] ❌ Veo 3 generation failed due to content policy violation")
+                                print(f"[API]   Error: {error_str}")
+                                print(f"[API]   This prompt contains words that violate Vertex AI's usage guidelines.")
+                                print(f"[API]   Even after sanitization, some terms may still trigger content filters.")
+                                print(f"[API]   Falling back to Sora 2 (more lenient content policy)...")
+                                video_model = "sora-2"
+                            else:
+                                print(f"[API] ❌ Veo 3 generation failed, falling back to Sora 2: {veo3_error}")
+                                video_model = "sora-2"
+                
+                # Use Sora 2 (default or fallback)
+                if video_model == "sora-2":
+                    # CRITICAL: Sora only supports 4, 8, or 12 seconds - validate and clamp
+                    # IMPORTANT: This validation ONLY applies to Sora, NOT Veo 3
+                    valid_durations = [4, 8, 12]
+                    original_duration = video_duration
+                    if video_duration not in valid_durations:
+                        # Find nearest valid duration
+                        video_duration = min(valid_durations, key=lambda x: abs(x - video_duration))
+                        print(f"[API] ⚠️ CRITICAL: Adjusted duration from {original_duration}s to valid Sora duration: {video_duration}s")
+                    
+                    # Double-check validation before Sora API call
+                    if video_duration not in valid_durations:
+                        video_duration = 8  # Safe fallback
+                        print(f"[API] ⚠️ CRITICAL: Forced duration to safe fallback: {video_duration}s")
+                    
+                    assert video_duration in valid_durations, f"Duration must be one of {valid_durations}, got {video_duration}"
+                    
+                    print(f"[API] Using video duration: {video_duration} seconds (VALIDATED for Sora 2)")
+                    if ai_decisions.get("duration"):
+                        print(f"[API] ✓ Duration decided by AI based on content analysis")
+                # Note: Veo 3 generation is handled above and returns early if successful
+                # This elif block should never be reached for Veo 3, but keeping for safety
+                elif video_model == "veo-3" or video_model == "veo3":
+                    # This should not happen - Veo 3 should have been handled above
+                    print(f"[API] ⚠️ WARNING: Veo 3 reached fallback block - this should not happen")
+                    print(f"[API] ⚠️ Veo 3 generation should have completed above. This is a logic error.")
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Veo 3 generation logic error - please check backend logs"
+                    )
+                
+            except Exception as video_error:
+                print(f"[API] ⚠️ Video generation error: {str(video_error)}")
+                import traceback
+                traceback.print_exc()
+                # Don't fail completely - return script even if video generation fails
+                print(f"[API] Returning script without video (user can retry video generation)")
+        
+        # Create summary of document context for response
+        context_summary = document_context[:500] + "..." if len(document_context) > 500 else document_context
+        
+        # Record video generation in user context (if user is authenticated)
+        if user_id:
+            try:
+                ai_decisions_dict = script_result.get("ai_decisions", {}) if script_result else {}
+                user_context_service.record_video_generation(user_id, {
+                    "topic": ai_decisions_dict.get("topic") or request.topic,
+                    "platform": request.platform or "linkedin",
+                    "video_model": video_model,
+                    "duration": ai_decisions_dict.get("duration") or request.duration or 8,
+                    "script": video_script[:500] if video_script else "",
+                    "approved": request.approved,
+                    "edited": bool(request.script and request.script != video_script)
+                })
+            except Exception as ctx_error:
+                print(f"[API] ⚠️ Could not record user context: {ctx_error}")
+        
+        # Ensure script_result is always a dict for response
+        if not script_result:
+            script_result = {"ai_decisions": {}}
+        
+        return DocumentVideoResponse(
+            script=video_script,
+            video_job=video_job,
+            document_context_summary=context_summary,
+            linkedin_optimization=linkedin_optimization,
+            key_insights=key_insights,
+            document_analysis=document_analysis,
+            ai_decisions=script_result.get("ai_decisions", {}) if script_result else {},
+            video_options=video_options
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error creating video from documents: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===== USER CONTEXT & PREFERENCES ENDPOINTS =====
+
+@app.post("/api/user/preferences", response_model=UserPreferencesResponse)
+async def update_user_preferences(request: UserPreferencesRequest):
+    """
+    Update user preferences for personalized content generation.
+    These preferences will be used to enhance future script and video generation.
+    """
+    try:
+        # TODO: Get user_id from authentication token
+        user_id = "guest_user"  # Placeholder - replace with actual user ID from auth
+        
+        # Update preferences
+        preferences_dict = request.dict(exclude_none=True)
+        user_context_service.update_preferences(user_id, preferences_dict)
+        
+        return UserPreferencesResponse(
+            preferences=preferences_dict,
+            message="Preferences updated successfully. These will be used to personalize future content generation."
+        )
+    except Exception as e:
+        print(f"[API] Error updating user preferences: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/user/context", response_model=UserContextResponse)
+async def get_user_context():
+    """
+    Get comprehensive user context including preferences, content history, and behavioral patterns.
+    """
+    try:
+        # TODO: Get user_id from authentication token
+        user_id = "guest_user"  # Placeholder - replace with actual user ID from auth
+        
+        context = user_context_service.get_user_context(user_id)
+        
+        return UserContextResponse(**context)
+    except Exception as e:
+        print(f"[API] Error getting user context: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/user/preferred-settings")
+async def get_preferred_settings():
+    """
+    Get user's preferred settings for auto-filling forms (video model, duration, platform, etc.)
+    """
+    try:
+        # TODO: Get user_id from authentication token
+        user_id = "guest_user"  # Placeholder - replace with actual user ID from auth
+        
+        settings = user_context_service.get_preferred_settings(user_id)
+        
+        return settings
+    except Exception as e:
+        print(f"[API] Error getting preferred settings: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== HYPERSPELL ENDPOINTS ====================
+
+@app.get("/api/hyperspell/connect-url")
+async def get_hyperspell_connect_url(current_user: User = Depends(get_current_user)):
+    """
+    Get Hyperspell Connect URL for user to link their accounts.
+    This allows Hyperspell to build a memory layer from user's connected data sources.
+    """
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        if not hyperspell_service.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Hyperspell service is not available. Please set HYPERSPELL_API_KEY environment variable."
+            )
+        
+        # Use email as user_id to match Hyperspell dashboard format
+        hyperspell_user_id = current_user.email
+        connect_url = hyperspell_service.get_connect_url(hyperspell_user_id)
+        
+        return {
+            "connect_url": connect_url,
+            "message": "Use this URL to connect your accounts to Hyperspell",
+            "instructions": "Open this URL in a new tab to connect your accounts (Gmail, Calendar, Documents, etc.)"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error getting Hyperspell connect URL: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/hyperspell/query")
+async def query_hyperspell_memories(
+    query: dict,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Query Hyperspell memory layer for relevant context.
+    
+    Request body:
+    {
+        "query": "What is the project deadline?",
+        "max_results": 5
+    }
+    """
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        if not hyperspell_service.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Hyperspell service is not available. Please set HYPERSPELL_API_KEY environment variable."
+            )
+        
+        # Use email as user_id to match Hyperspell dashboard format
+        hyperspell_user_id = current_user.email
+        query_text = query.get("query", "")
+        max_results = query.get("max_results", 5)
+        
+        if not query_text:
+            raise HTTPException(status_code=400, detail="Query text is required")
+        
+        result = await hyperspell_service.query_memories(hyperspell_user_id, query_text, max_results)
+        
+        if result is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to query Hyperspell memories. Please ensure your accounts are connected."
+            )
+        
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error querying Hyperspell memories: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/hyperspell/upload")
+async def upload_to_hyperspell(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Upload a document to Hyperspell memory layer.
+    Supported formats: PDF, DOCX, TXT, etc.
+    """
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        if not hyperspell_service.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Hyperspell service is not available. Please set HYPERSPELL_API_KEY environment variable."
+            )
+        
+        # Use email as user_id to match Hyperspell dashboard format
+        hyperspell_user_id = current_user.email
+        print(f"[API] Uploading document to Hyperspell for user: {hyperspell_user_id}")
+        
+        # Save uploaded file temporarily
+        import tempfile
+        import os
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp_file:
+            content = await file.read()
+            tmp_file.write(content)
+            tmp_path = tmp_file.name
+        
+        try:
+            # Upload to Hyperspell
+            result = await hyperspell_service.upload_document(
+                user_id=hyperspell_user_id,
+                file_path=tmp_path,
+                filename=file.filename
+            )
+            
+            if result is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to upload document to Hyperspell"
+                )
+            
+            return {
+                "success": True,
+                "resource_id": result.get("resource_id"),
+                "filename": result.get("filename"),
+                "message": "Document uploaded successfully to Hyperspell memory layer"
+            }
+        finally:
+            # Clean up temporary file
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error uploading to Hyperspell: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/hyperspell/add-memory")
+async def add_hyperspell_memory(
+    request: dict,
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Add a text memory to Hyperspell memory layer.
+    
+    Request body:
+    {
+        "text": "Your memory text here...",
+        "collection": "optional_collection_name"
+    }
+    """
+    try:
+        if not hyperspell_service.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Hyperspell service is not available. Please set HYPERSPELL_API_KEY environment variable."
+            )
+        
+        text = request.get("text", "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="Text is required")
+        
+        collection = request.get("collection", "user_memories")
+        user_id = current_user.email if current_user else "anonymous"
+        
+        print(f"[API] Adding text memory to Hyperspell for user: {user_id}")
+        
+        result = await hyperspell_service.add_text_memory(
+            user_id=user_id,
+            text=text,
+            collection=collection
+        )
+        
+        if result is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to add memory to Hyperspell"
+            )
+        
+        return {
+            "success": True,
+            "resource_id": result.get("resource_id"),
+            "message": "Memory added successfully to Hyperspell",
+            "text_preview": result.get("text_preview"),
+            "collection": result.get("collection")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error adding memory: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to add memory: {str(e)}")
+
+
+@app.get("/api/hyperspell/status")
+async def get_hyperspell_status():
+    """
+    Check Hyperspell service status and availability.
+    Public endpoint - no authentication required.
+    """
+    try:
+        available = hyperspell_service.is_available()
+        return {
+            "available": available,
+            "message": "Hyperspell is available" if available else "Hyperspell is not configured. Set HYPERSPELL_API_KEY environment variable."
+        }
+    except Exception as e:
+        print(f"[API] Error checking Hyperspell status: {str(e)}")
+        return {
+            "available": False,
+            "message": f"Error checking status: {str(e)}"
+        }
+
+
+@app.get("/api/hyperspell/mcp/info")
+async def get_mcp_server_info():
+    """
+    Get information about the Hyperspell MCP server and how to configure it.
+    """
+    try:
+        import os
+        backend_path = os.path.dirname(os.path.abspath(__file__))
+        mcp_server_path = os.path.join(backend_path, "services", "hyperspell_mcp_server.py")
+        start_script_path = os.path.join(backend_path, "start_mcp_server.py")
+        
+        return {
+            "mcp_server_available": True,
+            "mcp_server_path": mcp_server_path,
+            "start_script_path": start_script_path,
+            "hyperspell_available": hyperspell_service.is_available(),
+            "configuration": {
+                "claude_desktop": {
+                    "macos_path": "~/Library/Application Support/Claude/claude_desktop_config.json",
+                    "windows_path": "%APPDATA%\\Claude\\claude_desktop_config.json",
+                    "config_example": {
+                        "mcpServers": {
+                            "hyperspell": {
+                                "command": "python",
+                                "args": [mcp_server_path],
+                                "env": {
+                                    "HYPERSPELL_API_KEY": os.getenv("HYPERSPELL_API_KEY", "Your_API_Key"),
+                                    "HYPERSPELL_USER_ID": os.getenv("HYPERSPELL_USER_ID", "Your_User_ID")
+                                }
+                            }
+                        }
+                    }
+                },
+                "available_tools": [
+                    "search",
+                    "add_memory",
+                    "get_memory",
+                    "upload_file",
+                    "list_integrations",
+                    "connect_integration",
+                    "user_info"
+                ]
+            },
+            "instructions": "Add the MCP server configuration to your Claude Desktop config.json file. See the configuration example above."
+        }
+    except Exception as e:
+        print(f"[API] Error getting MCP server info: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

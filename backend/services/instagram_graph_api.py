@@ -23,12 +23,12 @@ class InstagramGraphAPIService:
         
         # Check if access token is provided
         if not self.access_token:
-            print("[IG Graph API] ⚠️ No access token set. Graph API features will be disabled.")
+            print("[IG Graph API] WARNING No access token set. Graph API features will be disabled.")
             print("[IG Graph API] To enable: Set INSTAGRAM_PAGE_ACCESS_TOKEN or INSTAGRAM_ACCESS_TOKEN in your .env file")
             print("[IG Graph API] See INSTAGRAM_GRAPH_API_SETUP.md for setup instructions")
         else:
             token_type = "Page Token" if os.getenv('INSTAGRAM_PAGE_ACCESS_TOKEN', '') else "User Token"
-            print(f"[IG Graph API] ✓ Service initialized")
+            print(f"[IG Graph API] OK Service initialized")
             print(f"[IG Graph API]   Token Type: {token_type}")
             print(f"[IG Graph API]   API Version: {self.graph_api_version}")
             print(f"[IG Graph API]   Base URL: {self.base_url}")

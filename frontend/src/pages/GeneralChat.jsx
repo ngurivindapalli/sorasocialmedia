@@ -9,7 +9,7 @@ function GeneralChat() {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
-      content: "Hello! I'm your AI assistant for VideoHook. I can help you understand how the platform works, explain features, guide you through using Instagram and LinkedIn tools, and answer questions about video generation with Sora. What would you like to know?"
+      content: "Hello! I'm your AI assistant for Aigis Marketing. I can help you understand how the platform works, explain features, guide you through using Instagram and LinkedIn tools, and answer questions about video generation with Sora. What would you like to know?"
     }
   ])
   const [userInput, setUserInput] = useState('')
@@ -114,7 +114,7 @@ function GeneralChat() {
     <div 
       className="min-h-screen flex flex-col"
       style={{ 
-        fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif',
+        fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif",
         backgroundColor: 'transparent'
       }}
     >
@@ -227,7 +227,7 @@ function GeneralChat() {
                   value={userInput}
                   onChange={(e) => setUserInput(e.target.value)}
                   onKeyPress={handleKeyPress}
-                  placeholder="Ask me anything about VideoHook..."
+                  placeholder="Ask me anything about Aigis Marketing..."
                   className="w-full px-4 py-3 rounded-lg focus:outline-none resize-none"
                   style={{
                     backgroundColor: '#f9fafb',

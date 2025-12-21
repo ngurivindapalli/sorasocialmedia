@@ -8,15 +8,17 @@ import TikTokTools from './TikTokTools.jsx'
 import XTools from './XTools.jsx'
 import GeneralChat from './GeneralChat.jsx'
 import Settings from './Settings.jsx'
-import { Menu, X as XIcon, Instagram, Linkedin, Music, MessageSquare, Settings as SettingsIcon } from 'lucide-react'
+import DocumentVideo from './DocumentVideo.jsx'
+import MarketingPost from './MarketingPost.jsx'
+import { Menu, X as XIcon, Instagram, Linkedin, Music, MessageSquare, Settings as SettingsIcon, FileVideo, Sparkles } from 'lucide-react'
 import '../App.css'
 
 function Dashboard() {
   // Persist activeTab in localStorage so it doesn't reset
-  // Default to 'instagram' for testing - teammates can test Veo generation
+  // Default to 'marketing-post' since it's the main feature
   const [activeTab, setActiveTab] = useState(() => {
     const saved = localStorage.getItem('videohook_activeTab')
-    return saved || 'instagram'
+    return saved || 'marketing-post'
   })
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const navigate = useNavigate()
@@ -81,16 +83,23 @@ function Dashboard() {
 
   const socialMediaTabs = [
     { id: 'chat', label: 'Chat', icon: null },
-    { id: 'linkedin', label: 'LinkedIn', icon: Linkedin },
-    { id: 'instagram', label: 'Instagram', icon: Instagram },
-    { id: 'tiktok', label: 'TikTok', icon: Music },
-    { id: 'x', label: 'X', icon: XIcon },
+    { id: 'marketing-post', label: 'Marketing Post', icon: Sparkles },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
+    // Hidden for now - not implemented yet:
+    // { id: 'document-video', label: 'Document Video', icon: FileVideo },
+    // { id: 'linkedin', label: 'LinkedIn', icon: Linkedin },
+    // { id: 'instagram', label: 'Instagram', icon: Instagram },
+    // { id: 'tiktok', label: 'TikTok', icon: Music },
+    // { id: 'x', label: 'X', icon: XIcon },
   ]
 
   const renderContent = () => {
     console.log('Rendering content for tab:', activeTab)
     switch (activeTab) {
+      case 'marketing-post':
+        return <MarketingPost />
+      case 'document-video':
+        return <DocumentVideo />
       case 'linkedin':
         return <LinkedInTools />
       case 'instagram':
@@ -114,23 +123,21 @@ function Dashboard() {
 
   return (
     <div 
-      className="min-h-screen bg-gradient-to-r from-[#cfd7f1] via-[#f0d7d2] to-[#f7f1f4] text-[#111827] inertia-scroll" 
-      style={{ fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif' }}
+      className="min-h-screen bg-white text-[#111827] inertia-scroll" 
+      style={{ fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif" }}
     >
       {/* Header */}
       <header 
-        className="fixed top-0 left-0 right-0 z-50 backdrop-blur-md" 
+        className="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-sm border-b border-[#e5e7eb]" 
         style={{ 
           height: '64px',
-          backgroundColor: 'rgba(255, 255, 255, 0.9)',
-          borderBottom: '1px solid #e5e7eb'
         }}
       >
-        <div className="h-full flex items-center justify-between w-full" style={{ paddingLeft: '8px', paddingRight: '24px' }}>
+        <div className="h-full flex items-center justify-between w-full" style={{ paddingLeft: '60px', paddingRight: '100px' }}>
           <div className="flex items-center" style={{ gap: '8px' }}>
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="rounded-lg hover:bg-gray-100 transition-all flex items-center justify-center"
+              className="rounded-lg hover:bg-[#f5f5f5] transition-all flex items-center justify-center text-[#111827]"
               style={{ 
                 transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                 padding: '8px',
@@ -143,13 +150,21 @@ function Dashboard() {
             <div className="text-[#111827] flex items-center">
               <Logo />
             </div>
-            <span className="text-[#111827] text-lg font-semibold tracking-tight ml-1">VideoHook</span>
+            <span className="text-[#111827] text-lg font-semibold tracking-tight ml-1">Aigis Marketing</span>
           </div>
           <div className="flex items-center gap-6">
             <span className="text-sm text-[#4b5563]" style={{ fontSize: '14px' }}>
               {currentUser?.username || 'Guest'}
             </span>
-            {/* Logout button removed - no authentication required */}
+            {currentUser && (
+              <button
+                onClick={handleLogout}
+                className="px-4 py-2 text-sm font-medium rounded-lg text-[#111827] hover:bg-[#f5f5f5] transition-colors"
+                style={{ fontSize: '14px', fontWeight: 500 }}
+              >
+                Logout
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -182,13 +197,13 @@ function Dashboard() {
                     setActiveTab(tab.id)
                   }}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all smooth-hover ${
-                    isActive ? 'bg-[#111827] text-white' : 'text-[#4b5563] hover:bg-[#f9fafb]'
+                    isActive ? 'bg-[#1e293b] text-white' : 'text-[#4b5563] hover:bg-[#f5f5f5]'
                   }`}
                   style={{
                     fontSize: '14px',
                     fontWeight: isActive ? 500 : 400,
                     transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                    cursor: 'pointer'
+                    cursor: 'pointer',
                   }}
                   onMouseEnter={(e) => {
                     if (!isActive) {
@@ -204,11 +219,7 @@ function Dashboard() {
                   }}
                 >
                   {Icon ? (
-                    tab.id === 'x' ? (
-                      <span className="w-5 h-5 flex items-center justify-center font-bold text-lg" style={{ fontFamily: 'system-ui' }}>𝕏</span>
-                    ) : (
-                      <Icon className="w-5 h-5" />
-                    )
+                    <Icon className="w-5 h-5" />
                   ) : (
                     <MessageSquare className="w-5 h-5" />
                   )}
@@ -221,10 +232,11 @@ function Dashboard() {
 
         {/* Main Content */}
         <main
-          className="flex-1 transition-all duration-300"
+          className="flex-1 transition-all duration-300 bg-white"
           style={{
             marginLeft: sidebarOpen ? '260px' : '0px',
-            transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+            transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+            minHeight: 'calc(100vh - 64px)'
           }}
         >
           {renderContent()}

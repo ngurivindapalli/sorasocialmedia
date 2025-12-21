@@ -1,0 +1,28 @@
+/* BACKUP: Falling posts gallery animation - Working version with longer fall distance */
+/* This is the animation that makes images fall further and fade later */
+/* Restore by copying this @keyframes fall section to App.css */
+
+/* Falling posts gallery animation */
+@keyframes fall {
+  0% {
+    transform: translateY(-30%);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  95% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(160%);
+    opacity: 0;
+  }
+}
+
+.falling-post {
+  will-change: transform, opacity;
+  /* The scale and translateZ are applied via inline styles, animation only handles translateY */
+}
+
+

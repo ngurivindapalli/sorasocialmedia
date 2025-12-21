@@ -1,0 +1,50 @@
+/* BACKUP V2: Falling posts gallery animation - Perfect seamless cycling version */
+/* This version has:
+   - Faster fade-out for all images (starts at 90% instead of 95%)
+   - Faster fade-out for first/leftmost image (starts at 90% instead of 95%)
+   - Images change AFTER fully disappearing (at 100% / 20s)
+   - Seamless infinite loop with independent slot cycling
+*/
+
+/* Falling posts gallery animation */
+@keyframes fall {
+  0% {
+    transform: translateY(-30%);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(160%);
+    opacity: 0;
+  }
+}
+
+/* Faster fade-out for first/leftmost image */
+@keyframes fall-fast-fade {
+  0% {
+    transform: translateY(-30%);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(160%);
+    opacity: 0;
+  }
+}
+
+.falling-post {
+  will-change: transform, opacity;
+  /* The scale and translateZ are applied via inline styles, animation only handles translateY */
+}
+
+

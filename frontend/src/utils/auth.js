@@ -8,13 +8,14 @@ export const authUtils = {
     try {
       const response = await api.post('/api/auth/signup', {
         username,
-        email,
+        email: email.toLowerCase().trim(),
         password
       })
       
-      // Store token and user info
+      // Store token and user info in localStorage (new signups default to remember me)
       localStorage.setItem('videohook_token', response.data.access_token)
       localStorage.setItem('videohook_current_user', JSON.stringify(response.data.user))
+      localStorage.setItem('videohook_remember_me', 'true')
       
       return { success: true, user: response.data.user }
     } catch (error) {
@@ -50,7 +51,7 @@ export const authUtils = {
         console.error('Request URL:', error.config?.url)
         console.error('Base URL:', error.config?.baseURL)
         console.error('Full URL:', error.config?.baseURL + error.config?.url)
-        errorMessage = 'Unable to connect to server. Please check if the backend is running on http://localhost:8000'
+        errorMessage = 'Unable to connect to server. Please check if the backend is running on  http://localhost:8000'
       } else if (error.message) {
         // Network or other error
         if (error.message.includes('Network Error') || error.code === 'ERR_NETWORK') {
@@ -70,27 +71,37 @@ export const authUtils = {
   },
 
   // Login user
-  async login(username, password) {
+  async login(email, password, rememberMe = false) {
     try {
       const response = await api.post('/api/auth/login', {
-        username,
+        email: email.toLowerCase().trim(),
         password
       })
       
-      // Store token and user info
-      localStorage.setItem('videohook_token', response.data.access_token)
-      localStorage.setItem('videohook_current_user', JSON.stringify(response.data.user))
+      // Choose storage based on remember me preference
+      const storage = rememberMe ? localStorage : sessionStorage
+      
+      // Store token and user info in appropriate storage
+      storage.setItem('videohook_token', response.data.access_token)
+      storage.setItem('videohook_current_user', JSON.stringify(response.data.user))
+      
+      // Also store remember me preference in localStorage (for checking on page load)
+      if (rememberMe) {
+        localStorage.setItem('videohook_remember_me', 'true')
+      } else {
+        localStorage.removeItem('videohook_remember_me')
+      }
       
       return { success: true, user: response.data.user }
     } catch (error) {
       console.error('Login error:', error)
-      let errorMessage = 'Invalid username or password'
+      let errorMessage = 'Invalid email or password'
       
       if (error.response) {
         // Server responded with error
         errorMessage = error.response.data?.detail || error.response.data?.message || errorMessage
         if (error.response.status === 401) {
-          errorMessage = 'Invalid username or password'
+          errorMessage = 'Invalid email or password'
         } else if (error.response.status === 500) {
           errorMessage = 'Server error. Please try again later.'
         }
@@ -109,10 +120,14 @@ export const authUtils = {
     }
   },
 
-  // Get current user from localStorage or API
+  // Get current user from localStorage or sessionStorage
   getCurrentUser() {
     try {
-      const user = localStorage.getItem('videohook_current_user')
+      // Check if remember me is enabled
+      const rememberMe = localStorage.getItem('videohook_remember_me') === 'true'
+      const storage = rememberMe ? localStorage : sessionStorage
+      
+      const user = storage.getItem('videohook_current_user')
       return user ? JSON.parse(user) : null
     } catch (error) {
       return null
@@ -123,7 +138,9 @@ export const authUtils = {
   async getCurrentUserFromAPI() {
     try {
       const response = await api.get('/api/auth/me')
-      localStorage.setItem('videohook_current_user', JSON.stringify(response.data))
+      const rememberMe = localStorage.getItem('videohook_remember_me') === 'true'
+      const storage = rememberMe ? localStorage : sessionStorage
+      storage.setItem('videohook_current_user', JSON.stringify(response.data))
       return response.data
     } catch (error) {
       return null
@@ -132,20 +149,28 @@ export const authUtils = {
 
   // Logout user
   logout() {
+    // Clear both localStorage and sessionStorage to be safe
     localStorage.removeItem('videohook_token')
     localStorage.removeItem('videohook_current_user')
+    localStorage.removeItem('videohook_remember_me')
+    sessionStorage.removeItem('videohook_token')
+    sessionStorage.removeItem('videohook_current_user')
   },
 
   // Check if user is authenticated
   isAuthenticated() {
-    const token = localStorage.getItem('videohook_token')
+    const rememberMe = localStorage.getItem('videohook_remember_me') === 'true'
+    const storage = rememberMe ? localStorage : sessionStorage
+    const token = storage.getItem('videohook_token')
     const user = this.getCurrentUser()
     return !!(token && user)
   },
 
   // Get auth token
   getToken() {
-    return localStorage.getItem('videohook_token')
+    const rememberMe = localStorage.getItem('videohook_remember_me') === 'true'
+    const storage = rememberMe ? localStorage : sessionStorage
+    return storage.getItem('videohook_token')
   }
 }
 

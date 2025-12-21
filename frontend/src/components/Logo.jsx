@@ -21,29 +21,58 @@ function Logo() {
       onClick={handleClick}
       style={{ cursor: 'pointer' }}
     >
-      {/* Stylized VH logo - VideoHook */}
+      {/* Aigis Marketing Logo - Modern "A" with AI-inspired design */}
+      {/* Main "A" shape */}
       <path
-        d="M8 8 L16 24 L24 8 M8 8 L8 24 M24 8 L24 24"
+        d="M16 6 L10 26 L12 26 L13.5 20 L18.5 20 L20 26 L22 26 L16 6 Z"
         stroke="currentColor"
         strokeWidth="2.5"
         strokeLinecap="round"
         strokeLinejoin="round"
         fill="none"
       />
-      {/* Decorative circle */}
+      {/* Crossbar of "A" */}
+      <line
+        x1="13.5"
+        y1="16"
+        x2="18.5"
+        y2="16"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+      />
+      {/* AI-inspired circuit pattern on the left */}
       <circle
-        cx="16"
-        cy="16"
-        r="14"
+        cx="8"
+        cy="12"
+        r="2"
+        fill="currentColor"
+        opacity="0.6"
+      />
+      <path
+        d="M8 14 L8 18 M6 16 L10 16"
         stroke="currentColor"
         strokeWidth="1.5"
-        fill="none"
-        opacity="0.2"
+        strokeLinecap="round"
+        opacity="0.6"
+      />
+      {/* AI-inspired circuit pattern on the right */}
+      <circle
+        cx="24"
+        cy="12"
+        r="2"
+        fill="currentColor"
+        opacity="0.6"
+      />
+      <path
+        d="M24 14 L24 18 M22 16 L26 16"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        opacity="0.6"
       />
     </svg>
   )
 }
 
 export default Logo
-
-

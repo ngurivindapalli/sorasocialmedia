@@ -4,6 +4,7 @@ import axios from 'axios'
 import SoraVideoPlayer from '../components/SoraVideoPlayer'
 import VideoGenerationLoader from '../components/VideoGenerationLoader'
 import { TextShimmer } from '../components/ui/text-shimmer'
+import DocumentUpload from '../components/DocumentUpload'
 import design from '../../design.json'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
@@ -30,6 +31,9 @@ function InstagramTools() {
   const [numImages, setNumImages] = useState(3)
   const [infoVideoResult, setInfoVideoResult] = useState(null)
   const [infoVideoJobStatus, setInfoVideoJobStatus] = useState(null) // Track video job status
+  
+  // Document upload state
+  const [documents, setDocuments] = useState([])
 
   // Design tokens
   const { colors, typography, spacing, layout } = design
@@ -61,14 +65,33 @@ function InstagramTools() {
     }
   }, [results])
 
+  // Adjust video duration when model changes to ensure it's within valid range
+  useEffect(() => {
+    if (videoModel === 'veo-3') {
+      // Veo 3 supports 4-60 seconds
+      if (videoSeconds < 4) {
+        setVideoSeconds(4)
+      } else if (videoSeconds > 60) {
+        setVideoSeconds(60)
+      }
+    } else {
+      // Sora 2 supports 5-16 seconds
+      if (videoSeconds < 5) {
+        setVideoSeconds(5)
+      } else if (videoSeconds > 16) {
+        setVideoSeconds(16)
+      }
+    }
+  }, [videoModel, videoSeconds])
+
   const handleAnalyze = async () => {
     if (mode === 'informational') {
       if (!username.trim()) {
         setError('Please enter an Instagram username to learn from')
         return
       }
-      if (!videoSeconds || videoSeconds < 5 || videoSeconds > 16) {
-        setError('Please enter a video duration between 5-16 seconds')
+      if (!videoSeconds || videoSeconds < 4 || videoSeconds > 60) {
+        setError('Please enter a video duration between 4-60 seconds for Veo 3')
         return
       }
     } else if (mode === 'single') {
@@ -100,7 +123,8 @@ function InstagramTools() {
         
         const requestPayload = {
           username: username.trim().replace('@', ''),
-          target_duration: videoSeconds
+          target_duration: videoSeconds,
+          document_ids: documents.map(doc => doc.id)
         }
         console.log('[Instagram] Request payload:', requestPayload)
         
@@ -121,7 +145,8 @@ function InstagramTools() {
           video_limit: videoLimit,
           video_seconds: videoSeconds,
           llm_provider: llmProvider,
-          video_model: videoModel
+          video_model: videoModel,
+          document_ids: documents.map(doc => doc.id)
         }
         console.log('[Instagram] Request payload:', requestPayload)
         console.log('[Instagram] Selected video model:', videoModel)
@@ -150,7 +175,8 @@ function InstagramTools() {
           videos_per_user: videosPerUser,
           combine_style: combineStyle,
           video_seconds: videoSeconds,
-          video_model: videoModel === 'sora-2' ? 'sora-2-pro' : videoModel // Use pro for multi-user
+          video_model: videoModel === 'sora-2' ? 'sora-2-pro' : videoModel, // Use pro for multi-user
+          document_ids: documents.map(doc => doc.id)
         })
         console.log('[Instagram] Multi-user API Response:', response.data)
         setResults({ type: 'multi', data: response.data })
@@ -332,6 +358,32 @@ function InstagramTools() {
           </button>
         </div>
 
+        {/* Document Upload Section */}
+        <div className="mb-8">
+          <label style={{ 
+            display: 'block',
+            fontSize: typography.sizes.sm, 
+            fontWeight: typography.weights.medium,
+            color: colors.text.primary,
+            marginBottom: spacing.scale.sm,
+            fontFamily: typography.fontFamilies.body
+          }}>
+            Upload Documents (Optional)
+          </label>
+          <p style={{ 
+            fontSize: typography.sizes.xs, 
+            color: colors.text.muted,
+            marginBottom: spacing.scale.md,
+            fontFamily: typography.fontFamilies.body
+          }}>
+            Upload PDF, DOCX, or TXT files to provide additional context for AI content generation
+          </p>
+          <DocumentUpload 
+            onDocumentsChange={setDocuments}
+            existingDocuments={documents}
+          />
+        </div>
+
         {mode === 'single' ? (
           <div className="space-y-6 mb-8">
             <div className="grid md:grid-cols-2 gap-6">
@@ -421,13 +473,19 @@ function InstagramTools() {
               </label>
               <input
                 type="number"
-                min="5"
-                max="16"
+                min={videoModel === 'veo-3' ? 4 : 5}
+                max={videoModel === 'veo-3' ? 60 : 16}
                 value={videoSeconds}
                 onChange={(e) => {
                   const val = parseInt(e.target.value)
-                  if (val >= 5 && val <= 16) {
-                    setVideoSeconds(val)
+                  if (videoModel === 'veo-3') {
+                    if (val >= 4 && val <= 60) {
+                      setVideoSeconds(val)
+                    }
+                  } else {
+                    if (val >= 5 && val <= 16) {
+                      setVideoSeconds(val)
+                    }
                   }
                 }}
                 className="w-full px-4 py-3 rounded-lg focus:outline-none"
@@ -444,8 +502,20 @@ function InstagramTools() {
                 color: colors.text.lightMuted,
                 marginTop: spacing.scale.xs
               }}>
-                How long each AI-generated video should be (5-16 seconds)
+                {videoModel === 'veo-3' 
+                  ? 'How long each AI-generated video should be (4-60 seconds for Veo 3)'
+                  : 'How long each AI-generated video should be (5-16 seconds for Sora 2)'}
               </p>
+              {videoModel === 'veo-3' && (
+                <p style={{ 
+                  fontSize: typography.sizes.xs, 
+                  color: '#f59e0b',
+                  marginTop: spacing.scale.xs,
+                  fontWeight: typography.weights.medium
+                }}>
+                  ⚠️ Note: Veo 3 generation may take 2-5 minutes for longer videos (30+ seconds)
+                </p>
+              )}
             </div>
 
             <div className="grid md:grid-cols-2 gap-6">
@@ -659,13 +729,19 @@ function InstagramTools() {
                 </label>
                 <input
                   type="number"
-                  min="5"
-                  max="16"
+                  min={videoModel === 'veo-3' ? 4 : 5}
+                  max={videoModel === 'veo-3' ? 60 : 16}
                   value={videoSeconds}
                   onChange={(e) => {
                     const val = parseInt(e.target.value)
-                    if (val >= 5 && val <= 16) {
-                      setVideoSeconds(val)
+                    if (videoModel === 'veo-3') {
+                      if (val >= 4 && val <= 60) {
+                        setVideoSeconds(val)
+                      }
+                    } else {
+                      if (val >= 5 && val <= 16) {
+                        setVideoSeconds(val)
+                      }
                     }
                   }}
                   className="w-full px-4 py-3 rounded-lg focus:outline-none"
@@ -682,8 +758,20 @@ function InstagramTools() {
                   color: colors.text.lightMuted,
                   marginTop: spacing.scale.xs
                 }}>
-                  How long the combined fusion video should be (5-16 seconds)
+                  {videoModel === 'veo-3' 
+                    ? 'How long the combined fusion video should be (4-60 seconds for Veo 3)'
+                    : 'How long the combined fusion video should be (5-16 seconds for Sora 2 Pro)'}
                 </p>
+                {videoModel === 'veo-3' && (
+                  <p style={{ 
+                    fontSize: typography.sizes.xs, 
+                    color: '#f59e0b',
+                    marginTop: spacing.scale.xs,
+                    fontWeight: typography.weights.medium
+                  }}>
+                    ⚠️ Note: Veo 3 generation may take 2-5 minutes for longer videos (30+ seconds)
+                  </p>
+                )}
               </div>
 
               <div>
@@ -783,10 +871,15 @@ function InstagramTools() {
               </label>
               <input
                 type="number"
-                min="5"
-                max="16"
+                min="4"
+                max="60"
                 value={videoSeconds}
-                onChange={(e) => setVideoSeconds(parseInt(e.target.value) || 8)}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value) || 8
+                  if (val >= 4 && val <= 60) {
+                    setVideoSeconds(val)
+                  }
+                }}
                 className="w-full px-4 py-3 rounded-lg focus:outline-none"
                 style={{
                   backgroundColor: colors.background.section,
@@ -801,7 +894,15 @@ function InstagramTools() {
                 color: colors.text.lightMuted,
                 marginTop: spacing.scale.xs
               }}>
-                How long should the video be? (5-16 seconds)
+                How long should the video be? (4-60 seconds for Veo 3)
+              </p>
+              <p style={{ 
+                fontSize: typography.sizes.xs, 
+                color: '#f59e0b',
+                marginTop: spacing.scale.xs,
+                fontWeight: typography.weights.medium
+              }}>
+                ⚠️ Note: Informational videos use Veo 3. Generation may take 2-5 minutes for longer videos (30+ seconds)
               </p>
             </div>
 

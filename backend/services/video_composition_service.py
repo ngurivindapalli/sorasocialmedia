@@ -18,9 +18,9 @@ class VideoCompositionService:
         
         if self.openai_api_key:
             self.openai_client = AsyncOpenAI(api_key=self.openai_api_key)
-            print("[VideoComposition] ✓ Service initialized")
+            print("[VideoComposition] OK Service initialized")
         else:
-            print("[VideoComposition] ⚠️ OpenAI API key not set. Smart composition features limited.")
+            print("[VideoComposition] WARNING OpenAI API key not set. Smart composition features limited.")
     
     async def create_smart_video_script(
         self,

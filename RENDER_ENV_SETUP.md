@@ -72,3 +72,21 @@ If you see errors, check:
 **Error: "401 Unauthorized"**
 → Make sure `GOOGLE_SERVICE_ACCOUNT_JSON` has the complete JSON (all fields including private_key)
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -39,7 +39,7 @@ function XTools() {
     <div 
       className="min-h-screen flex items-center justify-center"
       style={{ 
-        fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif',
+        fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif",
         paddingTop: '80px',
         paddingBottom: '80px',
         paddingLeft: '40px',

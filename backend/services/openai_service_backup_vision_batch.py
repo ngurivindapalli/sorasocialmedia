@@ -13,7 +13,7 @@ class OpenAIService:
         # Use fine-tuned model if provided, otherwise use gpt-4o-2024-08-06 (supports Structured Outputs)
         self.model = fine_tuned_model or "gpt-4o-2024-08-06"
         print(f"[OpenAI] Using model: {self.model}")
-        print(f"[OpenAI] Build Hours: Structured Outputs enabled ✓")
+        print(f"[OpenAI] Build Hours: Structured Outputs enabled OK")
     
     async def transcribe_video(self, video_path: str) -> str:
         """Transcribe video using Whisper API"""

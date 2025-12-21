@@ -20,6 +20,14 @@ const api = axios.create({
 // Add request logging in development
 api.interceptors.request.use(
   (config) => {
+    // If data is FormData, remove Content-Type header so axios can set it with boundary
+    if (config.data instanceof FormData) {
+      delete config.headers['Content-Type']
+      if (import.meta.env.DEV) {
+        console.log('[API] FormData detected - Content-Type header removed for multipart/form-data')
+      }
+    }
+    
     // Construct full URL for logging
     const fullUrl = config.baseURL 
       ? (config.baseURL.endsWith('/') ? config.baseURL.slice(0, -1) : config.baseURL) + 
@@ -28,6 +36,9 @@ api.interceptors.request.use(
     if (import.meta.env.DEV) {
       console.log('[API] Request:', config.method?.toUpperCase(), config.url, '-> Full URL:', fullUrl)
       console.log('[API] Base URL:', config.baseURL || '(relative - using Vite proxy)')
+      if (config.data instanceof FormData) {
+        console.log('[API] FormData fields:', Array.from(config.data.keys()))
+      }
     }
     return config
   },
@@ -62,7 +73,10 @@ api.interceptors.response.use(
 // Add auth token to requests (only if token exists - authentication is optional)
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('videohook_token')
+    // Check both localStorage and sessionStorage for token
+    const rememberMe = localStorage.getItem('videohook_remember_me') === 'true'
+    const storage = rememberMe ? localStorage : sessionStorage
+    const token = storage.getItem('videohook_token') || localStorage.getItem('videohook_token') || sessionStorage.getItem('videohook_token')
     // Only add Authorization header if token exists - don't require auth
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
@@ -80,10 +94,13 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     // Don't redirect on 401 errors - authentication is optional now
-    // Just clear any invalid tokens silently
+    // Just clear any invalid tokens silently from both storage locations
     if (error.response?.status === 401) {
       localStorage.removeItem('videohook_token')
       localStorage.removeItem('videohook_current_user')
+      localStorage.removeItem('videohook_remember_me')
+      sessionStorage.removeItem('videohook_token')
+      sessionStorage.removeItem('videohook_current_user')
     }
     return Promise.reject(error)
   }

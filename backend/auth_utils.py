@@ -25,7 +25,28 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def get_password_hash(password: str) -> str:
-    """Hash a password"""
+    """Hash a password
+    
+    Note: bcrypt has a 72-byte limit. This function should only be called after validation.
+    For safety, we truncate here as well, but validation should catch it first.
+    """
+    # Convert to bytes to check length
+    password_bytes = password.encode('utf-8')
+    
+    # Bcrypt has a 72-byte limit - truncate if necessary (safety measure)
+    # This should not be needed if validation is working, but it's a safety net
+    if len(password_bytes) > 72:
+        print(f"[AUTH] WARNING: Password exceeded 72 bytes ({len(password_bytes)} bytes), truncating")
+        password_bytes = password_bytes[:72]
+        # Decode back to string, handling any encoding errors
+        try:
+            password = password_bytes.decode('utf-8', errors='strict')
+        except UnicodeDecodeError:
+            # If truncation broke a multi-byte character, use error handling
+            password = password_bytes.decode('utf-8', errors='ignore')
+        print(f"[AUTH] Password truncated to {len(password_bytes)} bytes")
+    
+    # Passlib expects a string (it will handle encoding internally)
     return pwd_context.hash(password)
 
 

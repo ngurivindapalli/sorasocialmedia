@@ -59,17 +59,17 @@ class InstagramAPIService:
             try:
                 print(f"[IG] Attempting login as @{ig_username}...")
                 self.loader.login(ig_username, ig_password)
-                print(f"[IG] ✓ Successfully logged in as @{ig_username}")
+                print(f"[IG] OK Successfully logged in as @{ig_username}")
                 self.logged_in = True
             except Exception as login_error:
-                print(f"[IG] ⚠️ Login failed: {login_error}")
+                print(f"[IG] WARNING Login failed: {login_error}")
                 print(f"[IG] Continuing without authentication. This may cause rate limiting.")
                 self.logged_in = False
         else:
             if not ig_username:
-                print("[IG] ⚠️ INSTAGRAM_USERNAME not set in .env file")
+                print("[IG] WARNING INSTAGRAM_USERNAME not set in .env file")
             if not ig_password:
-                print("[IG] ⚠️ INSTAGRAM_PASSWORD not set in .env file")
+                print("[IG] WARNING INSTAGRAM_PASSWORD not set in .env file")
             print("[IG] Running without authentication (may be rate-limited).")
             print("[IG] Tip: Set INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD in backend/.env to avoid blocking.")
             self.logged_in = False
@@ -221,7 +221,7 @@ class InstagramAPIService:
             except KeyError as rate_limit_error:
                 # Instagram rate limited us - return what we have
                 if videos:
-                    print(f"[IG] ⚠️ Instagram rate limit reached after checking {checked_posts} posts. Returning {len(videos)} video(s) found so far.")
+                    print(f"[IG] WARNING Instagram rate limit reached after checking {checked_posts} posts. Returning {len(videos)} video(s) found so far.")
                 else:
                     raise Exception(f"Instagram blocked request after {checked_posts} posts. Please try again in a few minutes or use a different account.")
             
@@ -243,22 +243,22 @@ class InstagramAPIService:
                     print(f"[IG] Got 401 error, attempting to re-login...")
                     try:
                         self.loader.login(self.ig_username, self.ig_password)
-                        print(f"[IG] ✓ Re-login successful")
+                        print(f"[IG] OK Re-login successful")
                         self.logged_in = True
                         # Retry the request
                         return await self.get_user_videos(username, limit)
                     except Exception as relogin_error:
-                        print(f"[IG] ⚠️ Re-login failed: {relogin_error}")
+                        print(f"[IG] WARNING Re-login failed: {relogin_error}")
                 
                 if self.logged_in:
                     raise Exception(f"Instagram authentication failed even after login. Your credentials may be incorrect or your account may need verification. Error: {error_msg}")
                 else:
-                    raise Exception(f"⚠️ Instagram blocked the request (401 Unauthorized).\n\n🔧 Solutions:\n1. Add Instagram login credentials to backend/.env:\n   INSTAGRAM_USERNAME=your_username\n   INSTAGRAM_PASSWORD=\"your_password\" (use quotes if password has #)\n2. Verify your credentials are correct\n3. Try a different Instagram account\n4. Wait 10-15 minutes (rate limiting)\n\nAuthenticated requests are much less likely to be blocked!")
+                    raise Exception(f"WARNING Instagram blocked the request (401 Unauthorized).\n\nTIP Solutions:\n1. Add Instagram login credentials to backend/.env:\n   INSTAGRAM_USERNAME=your_username\n   INSTAGRAM_PASSWORD=\"your_password\" (use quotes if password has #)\n2. Verify your credentials are correct\n3. Try a different Instagram account\n4. Wait 10-15 minutes (rate limiting)\n\nAuthenticated requests are much less likely to be blocked!")
             elif "429" in error_msg:
                 if self.logged_in:
                     raise Exception(f"Instagram rate limit reached even with authentication. Please wait 10-15 minutes and try again.")
                 else:
-                    raise Exception(f"⚠️ Instagram rate limit reached (429).\n\n🔧 Solutions:\n1. Add Instagram login credentials to backend/.env to reduce rate limiting\n2. Wait 10-15 minutes before trying again\n3. Try a different Instagram account")
+                    raise Exception(f"WARNING Instagram rate limit reached (429).\n\nTIP Solutions:\n1. Add Instagram login credentials to backend/.env to reduce rate limiting\n2. Wait 10-15 minutes before trying again\n3. Try a different Instagram account")
             raise Exception(f"Instagram connection error: {str(e)}")
         except Exception as e:
             print(f"[IG] Unexpected error: {str(e)}")

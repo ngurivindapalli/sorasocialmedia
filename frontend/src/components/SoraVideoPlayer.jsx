@@ -75,11 +75,46 @@ function SoraVideoPlayer({ videoJob, onStatusChange }) {
       try {
         attempts++
         
-        const response = await axios.get(statusEndpoint)
+        // Recalculate endpoint in case job_id changed (for extensions)
+        const currentModel = videoJob.model || 'sora-2'
+        const currentIsVeo3 = currentModel === 'veo-3' || currentModel.startsWith('veo')
+        const currentEncodedJobId = currentIsVeo3 ? encodeURIComponent(videoJob.job_id) : videoJob.job_id
+        const currentStatusEndpoint = currentIsVeo3 
+          ? `${API_URL}/api/veo3/status/${currentEncodedJobId}`
+          : `${API_URL}/api/sora/status/${videoJob.job_id}`
+        
+        const response = await axios.get(currentStatusEndpoint)
         
         const data = response.data
         setStatus(data.status)
         setProgress(data.progress || 0)
+        
+        // Update extension metadata from response - CRITICAL: Always use response data
+        if (data.needs_extension !== undefined) {
+          videoJob.needs_extension = data.needs_extension
+          console.log(`[VideoPlayer] Updated needs_extension from response: ${data.needs_extension}`)
+        }
+        if (data.extension_count !== undefined) {
+          videoJob.extension_count = data.extension_count
+          console.log(`[VideoPlayer] Updated extension_count from response: ${data.extension_count}`)
+        }
+        if (data.extensions_completed !== undefined) {
+          videoJob.extensions_completed = data.extensions_completed
+          console.log(`[VideoPlayer] Updated extensions_completed from response: ${data.extensions_completed}`)
+        }
+        
+        // If job_id changed (extension started), update it
+        if (data.job_id && data.job_id !== videoJob.job_id) {
+          console.log(`[VideoPlayer] Job ID changed: ${videoJob.job_id.substring(0, 50)}... -> ${data.job_id.substring(0, 50)}...`)
+          videoJob.job_id = data.job_id
+        }
+        
+        // Force re-render if extension status changed
+        if (data.needs_extension === false && videoJob.needs_extension !== false) {
+          console.log(`[VideoPlayer] Extension disabled - forcing state update`)
+          // Trigger a re-render by updating status
+          setStatus(data.status)
+        }
         
         // Notify parent of status change
         if (onStatusChange) {
@@ -87,6 +122,64 @@ function SoraVideoPlayer({ videoJob, onStatusChange }) {
         }
 
         if (data.status === 'completed') {
+          // Check if this is a Veo 3 video that needs extension
+          const isVeo3Video = (videoJob.model === 'veo-3' || videoJob.model?.startsWith('veo'))
+          
+          // ALWAYS use data from response first (most up-to-date)
+          const needsExtension = data.needs_extension !== undefined ? data.needs_extension : (videoJob.needs_extension && videoJob.extension_count > 0)
+          const extensionCount = data.extension_count !== undefined ? data.extension_count : (videoJob.extension_count || 0)
+          const extensionsCompleted = data.extensions_completed !== undefined ? data.extensions_completed : (videoJob.extensions_completed || 0)
+          const isExtensionJob = data.is_extension === true
+          
+          console.log(`[VideoPlayer] Status: completed, isVeo3: ${isVeo3Video}`)
+          console.log(`[VideoPlayer] Extension data from response: needs_extension=${data.needs_extension}, count=${data.extension_count}, completed=${data.extensions_completed}`)
+          console.log(`[VideoPlayer] Extension data from videoJob: needs_extension=${videoJob.needs_extension}, count=${videoJob.extension_count}, completed=${videoJob.extensions_completed}`)
+          console.log(`[VideoPlayer] Final values: needsExtension=${needsExtension}, extensionCount=${extensionCount}, extensionsCompleted=${extensionsCompleted}`)
+          
+          // Update videoJob with latest data from response
+          if (data.needs_extension !== undefined) videoJob.needs_extension = data.needs_extension
+          if (data.extension_count !== undefined) videoJob.extension_count = data.extension_count
+          if (data.extensions_completed !== undefined) videoJob.extensions_completed = data.extensions_completed
+          
+          // If this is an extension job or we still need more extensions, continue polling
+          if (isVeo3Video && needsExtension && extensionsCompleted < extensionCount) {
+            // More extensions needed - update job_id and continue polling
+            console.log(`[VideoPlayer] Veo 3: Extension ${extensionsCompleted}/${extensionCount} completed, continuing...`)
+            // Update videoJob with new job_id for next extension
+            videoJob.job_id = data.job_id
+            // Update status to continue polling the new extension job
+            setStatus('queued')  // Reset status to queued for the new extension job
+            setProgress(0)
+            // Continue polling - backend will automatically trigger next extension
+            // DO NOT show video yet - wait for all extensions
+            return
+          }
+          
+          // Only show video if all extensions are complete (or no extensions needed, or extension was disabled)
+          // Also check if needs_extension was set to false (extension disabled/failed)
+          const extensionDisabled = data.needs_extension === false
+          const allExtensionsComplete = !needsExtension || (extensionsCompleted >= extensionCount) || extensionDisabled
+          
+          console.log(`[VideoPlayer] All extensions complete check:`)
+          console.log(`  - needsExtension: ${needsExtension}`)
+          console.log(`  - extensionsCompleted: ${extensionsCompleted}`)
+          console.log(`  - extensionCount: ${extensionCount}`)
+          console.log(`  - extensionDisabled: ${extensionDisabled}`)
+          console.log(`  - allExtensionsComplete: ${allExtensionsComplete}`)
+          
+          if (!allExtensionsComplete && !extensionDisabled) {
+            // Still extending - continue polling without showing video
+            console.log(`[VideoPlayer] Veo 3: Waiting for all extensions to complete (${extensionsCompleted}/${extensionCount})...`)
+            return
+          }
+          
+          // All extensions complete OR extension was disabled - now show the video
+          if (extensionDisabled) {
+            console.log(`[VideoPlayer] Veo 3: Extension disabled/failed. Showing available video.`)
+          } else {
+            console.log(`[VideoPlayer] Veo 3: All extensions complete! Showing final video.`)
+          }
+          
           // Handle video URL - could be direct URL or need to construct
           let finalUrl = videoUrl // Preserve existing URL
           if (data.video_url) {
@@ -95,14 +188,32 @@ function SoraVideoPlayer({ videoJob, onStatusChange }) {
               ? data.video_url 
               : `${API_URL}${data.video_url}`
             setVideoUrl(finalUrl) // Always set when we get a URL from polling
+            console.log(`[VideoPlayer] Setting video URL: ${finalUrl}`)
+          } else if (videoUrl) {
+            // Use existing video URL if available
+            finalUrl = videoUrl
+            console.log(`[VideoPlayer] Using existing video URL: ${finalUrl}`)
           }
+          
           // Notify parent of status change with video URL (only once)
           if (onStatusChange && finalUrl) {
             onStatusChange(data.status, data.progress || 100, finalUrl)
           }
+          
+          // Stop polling
           if (pollingIntervalRef.current) {
             clearInterval(pollingIntervalRef.current)
             pollingIntervalRef.current = null
+          }
+        } else if (data.status === 'queued' || data.status === 'in_progress') {
+          // If we get a queued/in_progress status and it's an extension job, update job_id
+          if (data.is_extension && data.job_id && data.job_id !== videoJob.job_id) {
+            console.log(`[VideoPlayer] Veo 3: Extension job started, updating job_id from ${videoJob.job_id} to ${data.job_id}`)
+            videoJob.job_id = data.job_id
+            // Update extension metadata
+            if (data.needs_extension !== undefined) videoJob.needs_extension = data.needs_extension
+            if (data.extension_count !== undefined) videoJob.extension_count = data.extension_count
+            if (data.extensions_completed !== undefined) videoJob.extensions_completed = data.extensions_completed
           }
         } else if (data.status === 'failed') {
           setError(data.error || 'Video generation failed')
@@ -147,9 +258,40 @@ function SoraVideoPlayer({ videoJob, onStatusChange }) {
     }
   }
 
-        // Show loading screen for queued or in_progress videos
-        if (status === 'queued' || status === 'in_progress') {
-          const modelName = (videoJob.model === 'veo-3' || videoJob.model?.startsWith('veo')) ? 'Veo 3' : 'Sora'
+        // Show loading screen for queued or in_progress videos, or if extensions are still in progress
+        const isVeo3Video = (videoJob.model === 'veo-3' || videoJob.model?.startsWith('veo'))
+        const needsExtension = videoJob.needs_extension && videoJob.extension_count > 0
+        const extensionsCompleted = videoJob.extensions_completed || 0
+        const extensionCount = videoJob.extension_count || 0
+        // Video should show if: no extension needed, all extensions done, or extension was disabled
+        const extensionDisabled = videoJob.needs_extension === false
+        const allExtensionsComplete = !needsExtension || (extensionsCompleted >= extensionCount) || extensionDisabled
+        const stillExtending = isVeo3Video && needsExtension && !allExtensionsComplete
+        
+        // Debug logging
+        if (isVeo3Video && status === 'completed') {
+          console.log(`[VideoPlayer] Render - status: ${status}, needsExtension: ${needsExtension}, completed: ${extensionsCompleted}/${extensionCount}, extensionDisabled: ${extensionDisabled}, allComplete: ${allExtensionsComplete}, stillExtending: ${stillExtending}`)
+        }
+        
+        // Debug logging
+        if (isVeo3Video && needsExtension) {
+          console.log(`[VideoPlayer] Render check - status: ${status}, needsExtension: ${needsExtension}, completed: ${extensionsCompleted}/${extensionCount}, allComplete: ${allExtensionsComplete}, stillExtending: ${stillExtending}`)
+        }
+        
+        // CRITICAL: If we have a video URL and status is completed, NEVER show loading screen
+        if (status === 'completed' && videoUrl) {
+          console.log(`[VideoPlayer] Video is completed and URL available - skipping loading screen`)
+          // Don't return - let it fall through to show the video
+        } else if (status === 'queued' || status === 'in_progress' || stillExtending) {
+          const modelName = isVeo3Video ? 'Veo 3' : 'Sora'
+          let message = status === 'queued' ? 'Video queued for generation...' : `Generating video with ${modelName} AI...`
+          
+          if (stillExtending) {
+            message = `Extending Veo 3 video... (${extensionsCompleted + 1}/${extensionCount} extensions) ${progress > 0 ? `(${progress}%)` : ''}`
+          } else if (progress > 0) {
+            message += ` ${progress}%`
+          }
+          
           return (
             <div className="mt-6">
               <h4 className="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
@@ -160,7 +302,7 @@ function SoraVideoPlayer({ videoJob, onStatusChange }) {
                 </span>
               </h4>
         <VideoGenerationLoader 
-          message={status === 'queued' ? 'Video queued for generation...' : `Generating video with ${(videoJob.model === 'veo-3' || videoJob.model?.startsWith('veo')) ? 'Veo 3' : 'Sora'} AI... ${progress > 0 ? `(${progress}%)` : ''}`}
+          message={message}
           inline={true}
         />
       </div>

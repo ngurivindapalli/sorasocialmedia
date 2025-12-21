@@ -26,8 +26,8 @@ Write-Host "   Location: $backendPath" -ForegroundColor Gray
 Write-Host "   URL: http://localhost:8000" -ForegroundColor Gray
 Write-Host ""
 
-# Start Backend in a new window
-$backendCommand = "cd '$backendPath'; if (Test-Path 'venv\Scripts\Activate.ps1') { .\venv\Scripts\Activate.ps1; Write-Host '[Backend] Virtual environment activated' -ForegroundColor Green } else { Write-Host '[Backend] No venv found, using system Python' -ForegroundColor Yellow }; Write-Host ''; Write-Host '========================================' -ForegroundColor Cyan; Write-Host '  BACKEND SERVER (FastAPI)' -ForegroundColor Cyan; Write-Host '========================================' -ForegroundColor Cyan; Write-Host 'Starting on http://localhost:8000' -ForegroundColor Green; Write-Host 'API Docs: http://localhost:8000/docs' -ForegroundColor Yellow; Write-Host ''; python main.py"
+# Start Backend in a new window (auto-restart DISABLED)
+$backendCommand = "cd '$backendPath'; if (Test-Path 'venv\Scripts\Activate.ps1') { .\venv\Scripts\Activate.ps1; Write-Host '[Backend] Virtual environment activated' -ForegroundColor Green } else { Write-Host '[Backend] No venv found, using system Python' -ForegroundColor Yellow }; Write-Host ''; Write-Host '========================================' -ForegroundColor Cyan; Write-Host '  BACKEND SERVER (FastAPI)' -ForegroundColor Cyan; Write-Host '  Auto-restart: DISABLED' -ForegroundColor Yellow; Write-Host '========================================' -ForegroundColor Cyan; Write-Host 'Starting on http://localhost:8000' -ForegroundColor Green; Write-Host 'API Docs: http://localhost:8000/docs' -ForegroundColor Yellow; Write-Host ''; python main.py"
 
 Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCommand -WindowStyle Normal
 

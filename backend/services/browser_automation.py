@@ -150,7 +150,7 @@ class BrowserAutomationService:
                             "error": "Login failed. Please check your credentials."
                         }
                     
-                    print("[BrowserAutomation] ✓ Login successful")
+                    print("[BrowserAutomation] OK Login successful")
                     
                     # Step 2: Navigate to create post
                     print("[BrowserAutomation] Step 2: Opening create post dialog...")
@@ -200,7 +200,7 @@ class BrowserAutomationService:
                         file_input = page.wait_for_selector('input[type="file"]', timeout=5000)
                     
                     file_input.set_input_files(video_path)
-                    print("[BrowserAutomation] ✓ Video selected")
+                    print("[BrowserAutomation] OK Video selected")
                     time.sleep(5)  # Wait for video to process
                     
                     # Step 4: Add caption
@@ -219,13 +219,13 @@ class BrowserAutomationService:
                             if caption_input:
                                 caption_input.fill(caption)
                                 caption_added = True
-                                print("[BrowserAutomation] ✓ Caption added")
+                                print("[BrowserAutomation] OK Caption added")
                                 break
                         except:
                             continue
                     
                     if not caption_added:
-                        print("[BrowserAutomation] ⚠️  Could not find caption input")
+                        print("[BrowserAutomation] WARNING  Could not find caption input")
                     
                     time.sleep(2)
                     
@@ -245,13 +245,13 @@ class BrowserAutomationService:
                             if share_button and share_button.is_visible():
                                 share_button.click()
                                 posted = True
-                                print("[BrowserAutomation] ✓ Post button clicked")
+                                print("[BrowserAutomation] OK Post button clicked")
                                 break
                         except:
                             continue
                     
                     if not posted:
-                        print("[BrowserAutomation] ⚠️  Could not find Share button automatically")
+                        print("[BrowserAutomation] WARNING  Could not find Share button automatically")
                         time.sleep(10)  # Give user time to click manually
                     
                     time.sleep(5)
