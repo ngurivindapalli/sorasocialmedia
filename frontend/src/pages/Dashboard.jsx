@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { authUtils } from '../utils/auth'
 import Logo from '../components/Logo'
 import InstagramTools from './InstagramTools.jsx'
@@ -8,15 +8,22 @@ import TikTokTools from './TikTokTools.jsx'
 import XTools from './XTools.jsx'
 import GeneralChat from './GeneralChat.jsx'
 import Settings from './Settings.jsx'
+import BrandContext from './BrandContext.jsx'
 import DocumentVideo from './DocumentVideo.jsx'
 import MarketingPost from './MarketingPost.jsx'
-import { Menu, X as XIcon, Instagram, Linkedin, Music, MessageSquare, Settings as SettingsIcon, FileVideo, Sparkles } from 'lucide-react'
+import { Menu, X as XIcon, Instagram, Linkedin, Music, MessageSquare, Settings as SettingsIcon, FileVideo, Sparkles, FileText } from 'lucide-react'
 import '../App.css'
 
 function Dashboard() {
+  const [searchParams, setSearchParams] = useSearchParams()
   // Persist activeTab in localStorage so it doesn't reset
   // Default to 'marketing-post' since it's the main feature
+  // Check URL params first, then localStorage
   const [activeTab, setActiveTab] = useState(() => {
+    const tabFromUrl = searchParams.get('tab')
+    if (tabFromUrl) {
+      return tabFromUrl
+    }
     const saved = localStorage.getItem('videohook_activeTab')
     return saved || 'marketing-post'
   })
@@ -25,6 +32,29 @@ function Dashboard() {
   const currentUser = authUtils.getCurrentUser()
   const [isVisible, setIsVisible] = useState({})
   const sectionRefs = useRef({})
+
+  // Handle URL parameters (for OAuth callbacks)
+  useEffect(() => {
+    const tabParam = searchParams.get('tab')
+    const connectedParam = searchParams.get('connected')
+    
+    if (tabParam && tabParam !== activeTab) {
+      setActiveTab(tabParam)
+      localStorage.setItem('videohook_activeTab', tabParam)
+    }
+    
+    if (connectedParam) {
+      // Integration was connected, show success message
+      // The BrandContext component will reload integrations automatically
+      // Remove the query params from URL
+      const newSearchParams = new URLSearchParams(searchParams)
+      newSearchParams.delete('connected')
+      if (newSearchParams.get('tab')) {
+        newSearchParams.delete('tab')
+      }
+      setSearchParams(newSearchParams, { replace: true })
+    }
+  }, [searchParams, activeTab, setSearchParams])
 
   // Save activeTab to localStorage when it changes
   useEffect(() => {
@@ -84,6 +114,7 @@ function Dashboard() {
   const socialMediaTabs = [
     { id: 'chat', label: 'Chat', icon: null },
     { id: 'marketing-post', label: 'Marketing Post', icon: Sparkles },
+    { id: 'brand-context', label: 'Brand Context', icon: FileText },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
     // Hidden for now - not implemented yet:
     // { id: 'document-video', label: 'Document Video', icon: FileVideo },
@@ -98,6 +129,8 @@ function Dashboard() {
     switch (activeTab) {
       case 'marketing-post':
         return <MarketingPost />
+      case 'brand-context':
+        return <BrandContext />
       case 'document-video':
         return <DocumentVideo />
       case 'linkedin':
