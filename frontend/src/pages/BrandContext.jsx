@@ -39,6 +39,7 @@ function BrandContext() {
   const [marketContextSummary, setMarketContextSummary] = useState('')
   const [overallSummary, setOverallSummary] = useState('')
   const [loadingSummaries, setLoadingSummaries] = useState(false)
+  const [uploadSuccess, setUploadSuccess] = useState('')
 
   useEffect(() => {
     loadUserSettings()
@@ -448,7 +449,7 @@ function BrandContext() {
   // All the handler functions from Settings (handleDocumentUpload, handleSendDocument, etc.)
   // ... (I'll include the key ones, but you may want to copy all handlers from Settings.jsx)
   
-  const handleDocumentUpload = async (e) => {
+  const handleDocumentSelect = (e) => {
     const file = e.target.files[0]
     if (!file) return
 
@@ -463,6 +464,15 @@ function BrandContext() {
       setError('File size exceeds 10MB limit.')
       return
     }
+
+    // Just set the file - don't upload yet
+    setUploadedDoc(file)
+    setUploadedDocName(file.name)
+    setError('')
+  }
+
+  const handleDocumentUpload = async () => {
+    if (!uploadedDoc) return
 
     try {
       setUploadingDoc(true)
@@ -487,6 +497,7 @@ function BrandContext() {
       }
 
       const documentId = uploadResponse.data.document_id
+      setUploadedDocId(documentId)
       console.log('[BrandContext] Document uploaded locally:', documentId)
       
       // Step 2: Immediately save to Hyperspell (user's specific memory account)
@@ -523,6 +534,11 @@ function BrandContext() {
           
           // Reload summaries after adding document
           await loadSummaries()
+          
+          // Show success notification
+          const fileName = uploadedDocName || file.name
+          setUploadSuccess(`✅ Document "${fileName}" uploaded successfully and saved to Hyperspell!`)
+          setTimeout(() => setUploadSuccess(''), 5000) // Clear after 5 seconds
           
           console.log('[BrandContext] Document successfully saved to Hyperspell and removed from upload state')
         } else {
