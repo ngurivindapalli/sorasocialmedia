@@ -6,7 +6,7 @@
   "cleanUrls": true,
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/((?!assets|static-posts|.*\\.(js|css|png|jpg|jpeg|gif|svg|ico|json|webp|mp4|webm|woff|woff2|ttf|eot)).*)",
       "destination": "/index.html"
     }
   ],
