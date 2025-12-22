@@ -6,8 +6,15 @@
   "cleanUrls": true,
   "rewrites": [
     {
-      "source": "/((?!assets|static-posts|.*\\.(js|css|png|jpg|jpeg|gif|svg|ico|json|webp|mp4|webm|woff|woff2|ttf|eot)).*)",
-      "destination": "/index.html"
+      "source": "/:path*",
+      "destination": "/index.html",
+      "has": [
+        {
+          "type": "header",
+          "key": "accept",
+          "value": "text/html"
+        }
+      ]
     }
   ],
   "headers": [
