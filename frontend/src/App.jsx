@@ -13,14 +13,14 @@ function App() {
     <Router>
       <Routes>
         {/* Routes */}
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/" element={<LandingPage />} />
         <Route path="/landing" element={<LandingPage />} />
+        <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
         <Route path="/marketing-post" element={<MarketingPost />} />
         <Route path="/hyperspell-memories" element={<HyperspellMemories />} />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Router>
   )
