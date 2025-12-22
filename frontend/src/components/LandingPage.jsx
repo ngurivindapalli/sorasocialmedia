@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { Link } from 'react-router-dom'
 import '../App.css'
 import Logo from './Logo'
 import FallingPostsGallery from './FallingPostsGallery'
@@ -1156,9 +1157,15 @@ function LandingPage() {
       {/* Footer */}
       <div className="border-t border-[#e5e7eb] py-8 bg-white">
         <div className="max-w-[1200px] mx-auto px-6" style={{ paddingLeft: '40px', paddingRight: '40px' }}>
-          <div className="flex items-center justify-between text-sm" style={{ fontSize: '14px', color: '#4b5563' }}>
-            <div>Powered by GPT-4, Whisper, Google Imagen, Veo 3.1, and Hyperspell</div>
-            <div>© 2025 Aigis Marketing</div>
+          <div className="flex flex-col md:flex-row items-center justify-between gap-4 text-sm" style={{ fontSize: '14px', color: '#4b5563' }}>
+            <div className="flex items-center gap-6">
+              <Link to="/terms-of-service" className="text-[#1e293b] hover:underline">Terms of Service</Link>
+              <Link to="/privacy-policy" className="text-[#1e293b] hover:underline">Privacy Policy</Link>
+            </div>
+            <div className="text-center md:text-right">
+              <div>Powered by GPT-4, Whisper, Google Imagen, Veo 3.1, and Hyperspell</div>
+              <div className="mt-1">© 2025 Aigis Marketing</div>
+            </div>
           </div>
         </div>
       </div>

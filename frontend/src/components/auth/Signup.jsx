@@ -200,11 +200,21 @@ function Signup() {
             </button>
           </form>
 
-          <div className="mt-6 text-center">
+          <div className="mt-6 text-center space-y-3">
             <p className="text-sm text-[#4b5563]" style={{ fontSize: '14px' }}>
               Already have an account?{' '}
               <Link to="/login" className="text-[#1e293b] font-medium hover:underline">
                 Log in
+              </Link>
+            </p>
+            <p className="text-xs text-[#6b7280]" style={{ fontSize: '12px' }}>
+              By signing up, you agree to our{' '}
+              <Link to="/terms-of-service" className="text-[#1e293b] hover:underline">
+                Terms of Service
+              </Link>
+              {' '}and{' '}
+              <Link to="/privacy-policy" className="text-[#1e293b] hover:underline">
+                Privacy Policy
               </Link>
             </p>
           </div>

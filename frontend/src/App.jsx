@@ -5,6 +5,8 @@ import Signup from './components/auth/Signup'
 import Dashboard from './pages/Dashboard'
 import MarketingPost from './pages/MarketingPost'
 import HyperspellMemories from './pages/HyperspellMemories'
+import TermsOfService from './pages/TermsOfService'
+import PrivacyPolicy from './pages/PrivacyPolicy'
 import ProtectedRoute from './components/ProtectedRoute'
 import './App.css'
 
@@ -18,6 +20,8 @@ function App() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        <Route path="/terms-of-service" element={<TermsOfService />} />
+        <Route path="/privacy-policy" element={<PrivacyPolicy />} />
         <Route path="/marketing-post" element={<MarketingPost />} />
         <Route path="/hyperspell-memories" element={<HyperspellMemories />} />
         <Route path="*" element={<Navigate to="/" replace />} />
