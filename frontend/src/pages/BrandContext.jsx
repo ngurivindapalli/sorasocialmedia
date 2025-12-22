@@ -537,7 +537,7 @@ function BrandContext() {
           
           // Show success notification
           const fileName = uploadedDocName || file.name
-          setUploadSuccess(`✅ Document "${fileName}" uploaded successfully and saved to Hyperspell!`)
+          setUploadSuccess(`Document "${fileName}" uploaded successfully and saved to Hyperspell!`)
           setTimeout(() => setUploadSuccess(''), 5000) // Clear after 5 seconds
           
           console.log('[BrandContext] Document successfully saved to Hyperspell and removed from upload state')
