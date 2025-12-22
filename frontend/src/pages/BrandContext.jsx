@@ -920,21 +920,18 @@ function BrandContext() {
               <input
                 type="file"
                 id="brand-context-upload"
-                onChange={handleDocumentUpload}
+                onChange={handleDocumentSelect}
                 accept=".pdf,.doc,.docx,.txt"
                 className="hidden"
-                disabled={uploadingDoc}
+                disabled={uploadingDoc || sendingDoc}
               />
               <label htmlFor="brand-context-upload" className="cursor-pointer">
                 <div className="flex flex-col items-center gap-2">
                   <Upload className="w-8 h-8 text-[#4b5563]" />
                   <div>
-                    <span className="text-sm text-[#111827] font-medium">Click to upload</span>
+                    <span className="text-sm text-[#111827] font-medium">Click to select file</span>
                     <p className="text-xs text-[#4b5563] mt-1">
                       PDF, DOC, DOCX, or TXT (max 10MB)
-                    </p>
-                    <p className="text-xs text-[#9ca3af] mt-1">
-                      (Automatically saved to Hyperspell)
                     </p>
                   </div>
                 </div>
