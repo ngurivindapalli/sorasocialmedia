@@ -24,6 +24,8 @@ from services.video_composition_service import VideoCompositionService
 from services.document_service import DocumentService
 from services.user_context_service import UserContextService
 from services.hyperspell_service import HyperspellService
+from services.notion_service import NotionService
+from services.google_drive_service import GoogleDriveService
 from utils.hyperspell_helper import get_hyperspell_context
 from utils.post_memory_helper import save_post_to_memory, is_first_post, get_post_performance_context
 from services.web_research_service import WebResearchService
@@ -44,9 +46,13 @@ from models.schemas import (
     DocumentVideoRequest, DocumentVideoResponse,
     VideoOptionsRequest, VideoOptionsResponse, ScriptApprovalRequest,
     UserPreferencesRequest, UserPreferencesResponse, UserContextResponse,
-    FindCompetitorsRequest
+    FindCompetitorsRequest,
+    IntegrationConnectionResponse,
+    NotionPageResponse,
+    GoogleDriveFileResponse,
+    ImportContentRequest
 )
-from database import init_db, get_db, User, SocialMediaConnection, PostHistory
+from database import init_db, get_db, User, SocialMediaConnection, PostHistory, IntegrationConnection
 from auth_utils import get_password_hash, verify_password, create_access_token, get_current_user
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
@@ -170,6 +176,8 @@ app.add_middleware(
         "http://localhost:5173",
         "https://web-production-2b02d.up.railway.app",
         "https://*.vercel.app",
+        "https://aigismarketing.com",
+        "https://www.aigismarketing.com",
         "*"  # Allow all origins in production (you can restrict this later)
     ],
     allow_credentials=True,
@@ -194,6 +202,9 @@ video_composition_service = VideoCompositionService()
 document_service = DocumentService()
 # Initialize Hyperspell service
 hyperspell_service = HyperspellService()
+# Initialize integration services
+notion_service = NotionService()
+google_drive_service = GoogleDriveService()
 # Initialize user context service with Hyperspell integration
 user_context_service = UserContextService(hyperspell_service=hyperspell_service)
 # Check for fine-tuned model in environment
@@ -1959,6 +1970,387 @@ async def disconnect_account(connection_id: int, db: Session = Depends(get_db)):
     db.commit()
     
     return {"message": "Account disconnected successfully"}
+
+
+# ===== INTEGRATION ENDPOINTS (Notion, Google Drive) =====
+
+@app.get("/api/integrations/{platform}/authorize")
+async def integration_authorize(
+    platform: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Initiate OAuth flow for Notion or Google Drive"""
+    if platform not in ["notion", "google_drive"]:
+        raise HTTPException(status_code=400, detail="Invalid platform. Supported: notion, google_drive")
+    
+    # Generate state token
+    state = secrets.token_urlsafe(32)
+    oauth_states[state] = {
+        "user_id": current_user.id,
+        "platform": platform,
+        "created_at": datetime.utcnow()
+    }
+    
+    try:
+        if platform == "notion":
+            # Always use OAuth flow for Notion (each user connects their own account)
+            if not notion_service.client_id or not notion_service.client_secret:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Notion OAuth not configured. Please set NOTION_CLIENT_ID and NOTION_CLIENT_SECRET in your environment variables."
+                )
+            auth_url = notion_service.get_authorization_url(state)
+        elif platform == "google_drive":
+            if not google_drive_service.client_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Google Drive OAuth not configured. Set GOOGLE_DRIVE_CLIENT_ID and GOOGLE_DRIVE_CLIENT_SECRET"
+                )
+            auth_url = google_drive_service.get_authorization_url(state)
+        
+        return {"auth_url": auth_url, "state": state}
+    except Exception as e:
+        print(f"[Integration] Error generating auth URL: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/integrations/{platform}/callback")
+async def integration_callback(
+    platform: str,
+    code: str,
+    state: str,
+    db: Session = Depends(get_db)
+):
+    """Handle OAuth callback for integrations"""
+    if platform not in ["notion", "google_drive"]:
+        raise HTTPException(status_code=400, detail="Invalid platform")
+    
+    # Verify state
+    if state not in oauth_states:
+        raise HTTPException(status_code=400, detail="Invalid state token")
+    
+    state_data = oauth_states[state]
+    user_id = state_data.get("user_id")
+    
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User not found in state")
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Exchange code for token
+    try:
+        if platform == "notion":
+            token_data = await notion_service.exchange_code_for_token(code)
+            if not token_data:
+                raise HTTPException(status_code=400, detail="Failed to exchange code for token")
+            
+            access_token = token_data.get("access_token")
+            user_info = await notion_service.get_user_info(access_token)
+            
+            # Calculate token expiry
+            expires_in = token_data.get("expires_in", 3600)
+            expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+            
+            # Save or update connection
+            existing = db.query(IntegrationConnection).filter(
+                IntegrationConnection.user_id == user_id,
+                IntegrationConnection.platform == "notion"
+            ).first()
+            
+            if existing:
+                existing.access_token = access_token
+                existing.token_expires_at = expires_at
+                existing.is_active = True
+                existing.platform_user_id = user_info.get("id") if user_info else None
+                existing.platform_user_email = user_info.get("email") if user_info else None
+            else:
+                existing = IntegrationConnection(
+                    user_id=user_id,
+                    platform="notion",
+                    access_token=access_token,
+                    token_expires_at=expires_at,
+                    platform_user_id=user_info.get("id") if user_info else None,
+                    platform_user_email=user_info.get("email") if user_info else None
+                )
+                db.add(existing)
+            
+            db.commit()
+            
+        elif platform == "google_drive":
+            token_data = await google_drive_service.exchange_code_for_token(code)
+            if not token_data:
+                raise HTTPException(status_code=400, detail="Failed to exchange code for token")
+            
+            access_token = token_data.get("access_token")
+            refresh_token = token_data.get("refresh_token")
+            
+            # Calculate token expiry
+            expires_in = token_data.get("expires_in", 3600)
+            expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+            
+            # Save or update connection
+            existing = db.query(IntegrationConnection).filter(
+                IntegrationConnection.user_id == user_id,
+                IntegrationConnection.platform == "google_drive"
+            ).first()
+            
+            if existing:
+                existing.access_token = access_token
+                existing.refresh_token = refresh_token
+                existing.token_expires_at = expires_at
+                existing.is_active = True
+            else:
+                existing = IntegrationConnection(
+                    user_id=user_id,
+                    platform="google_drive",
+                    access_token=access_token,
+                    refresh_token=refresh_token,
+                    token_expires_at=expires_at
+                )
+                db.add(existing)
+            
+            db.commit()
+        
+        # Clean up state
+        del oauth_states[state]
+        
+        # Redirect to frontend (Brand Context page)
+        from fastapi.responses import RedirectResponse
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        return RedirectResponse(url=f"{frontend_url}/dashboard?tab=brand-context&connected={platform}")
+        
+    except Exception as e:
+        print(f"[Integration] Error in callback: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/integrations", response_model=List[IntegrationConnectionResponse])
+async def get_integrations(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all active integrations for the current user"""
+    connections = db.query(IntegrationConnection).filter(
+        IntegrationConnection.user_id == current_user.id,
+        IntegrationConnection.is_active == True
+    ).all()
+    
+    return [
+        IntegrationConnectionResponse(
+            id=conn.id,
+            platform=conn.platform,
+            platform_user_email=conn.platform_user_email,
+            is_active=conn.is_active,
+            connected_at=conn.connected_at.isoformat(),
+            last_synced_at=conn.last_synced_at.isoformat() if conn.last_synced_at else None
+        )
+        for conn in connections
+    ]
+
+
+def _extract_notion_title(page: dict) -> str:
+    """Extract title from Notion page object"""
+    properties = page.get("properties", {})
+    for prop_name, prop_data in properties.items():
+        if prop_data.get("type") == "title":
+            title_array = prop_data.get("title", [])
+            if title_array:
+                return "".join([item.get("plain_text", "") for item in title_array])
+    # Fallback to page URL or ID
+    return page.get("url", "").split("/")[-1] or page.get("id", "")
+
+
+@app.get("/api/integrations/notion/pages", response_model=List[NotionPageResponse])
+async def list_notion_pages(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all pages from user's Notion workspace"""
+    # Get user's OAuth connection (required - no internal token fallback)
+    connection = db.query(IntegrationConnection).filter(
+        IntegrationConnection.user_id == current_user.id,
+        IntegrationConnection.platform == "notion",
+        IntegrationConnection.is_active == True
+    ).first()
+    
+    if not connection or not connection.access_token:
+        raise HTTPException(
+            status_code=404, 
+            detail="Notion not connected. Please connect your Notion account first."
+        )
+    
+    pages = await notion_service.search_pages(connection.access_token)
+    
+    return [
+        NotionPageResponse(
+            id=page.get("id", ""),
+            title=_extract_notion_title(page),
+            url=page.get("url"),
+            last_edited_time=page.get("last_edited_time")
+        )
+        for page in pages
+    ]
+
+
+@app.get("/api/integrations/google-drive/files", response_model=List[GoogleDriveFileResponse])
+async def list_google_drive_files(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    mime_type: Optional[str] = None
+):
+    """List files from user's Google Drive"""
+    connection = db.query(IntegrationConnection).filter(
+        IntegrationConnection.user_id == current_user.id,
+        IntegrationConnection.platform == "google_drive",
+        IntegrationConnection.is_active == True
+    ).first()
+    
+    if not connection:
+        raise HTTPException(status_code=404, detail="Google Drive not connected")
+    
+    # Refresh token if needed
+    access_token = connection.access_token
+    if connection.token_expires_at and connection.token_expires_at < datetime.utcnow():
+        if connection.refresh_token:
+            token_data = await google_drive_service.refresh_access_token(connection.refresh_token)
+            if token_data:
+                access_token = token_data.get("access_token")
+                connection.access_token = access_token
+                expires_in = token_data.get("expires_in", 3600)
+                connection.token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+                db.commit()
+    
+    files = await google_drive_service.list_files(access_token, mime_type)
+    
+    return [
+        GoogleDriveFileResponse(
+            id=file.get("id", ""),
+            name=file.get("name", ""),
+            mime_type=file.get("mimeType", ""),
+            modified_time=file.get("modifiedTime"),
+            size=file.get("size"),
+            web_view_link=None
+        )
+        for file in files
+    ]
+
+
+@app.post("/api/integrations/import")
+async def import_content(
+    request: ImportContentRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Import content from Notion or Google Drive to Hyperspell"""
+    connection = db.query(IntegrationConnection).filter(
+        IntegrationConnection.id == request.integration_id,
+        IntegrationConnection.user_id == current_user.id,
+        IntegrationConnection.is_active == True
+    ).first()
+    
+    # For Notion with internal token, connection might not exist
+    platform = connection.platform if connection else "notion"  # Default to notion if using internal token
+    
+    if not connection and platform != "notion":
+        raise HTTPException(status_code=404, detail="Integration not found")
+    
+    # Check if using Notion internal token
+    if platform == "notion" and not connection and not notion_service.internal_token:
+        raise HTTPException(status_code=404, detail="Notion not connected and no internal token configured")
+    
+    user_id = current_user.email.lower().strip()
+    imported_items = []
+    errors = []
+    
+    try:
+        if platform == "notion":
+            # Use connection token if available, otherwise use internal token
+            access_token = connection.access_token if connection else None
+            for page_id in request.item_ids:
+                try:
+                    content = await notion_service.get_page_content(access_token, page_id)
+                    if content:
+                        # Upload to Hyperspell
+                        memory_id = await hyperspell_service.add_text_memory(
+                            user_id=user_id,
+                            text=content,
+                            collection=request.collection or "documents"
+                        )
+                        imported_items.append({"id": page_id, "memory_id": memory_id})
+                    else:
+                        errors.append({"id": page_id, "error": "Failed to fetch content"})
+                except Exception as e:
+                    errors.append({"id": page_id, "error": str(e)})
+        
+        elif connection.platform == "google_drive":
+            access_token = connection.access_token
+            # Refresh token if needed
+            if connection.token_expires_at and connection.token_expires_at < datetime.utcnow():
+                if connection.refresh_token:
+                    token_data = await google_drive_service.refresh_access_token(connection.refresh_token)
+                    if token_data:
+                        access_token = token_data.get("access_token")
+            
+            for file_id in request.item_ids:
+                try:
+                    # Get file metadata first
+                    metadata = await google_drive_service.get_file_metadata(access_token, file_id)
+                    if not metadata:
+                        errors.append({"id": file_id, "error": "Failed to fetch metadata"})
+                        continue
+                    
+                    mime_type = metadata.get("mimeType", "")
+                    content = await google_drive_service.get_file_content(access_token, file_id, mime_type)
+                    
+                    if content:
+                        # Upload to Hyperspell
+                        memory_id = await hyperspell_service.add_text_memory(
+                            user_id=user_id,
+                            text=content,
+                            collection=request.collection or "documents"
+                        )
+                        imported_items.append({"id": file_id, "memory_id": memory_id, "name": metadata.get("name")})
+                    else:
+                        errors.append({"id": file_id, "error": "Failed to fetch content"})
+                except Exception as e:
+                    errors.append({"id": file_id, "error": str(e)})
+        
+        # Update last_synced_at
+        connection.last_synced_at = datetime.utcnow()
+        db.commit()
+        
+        return {
+            "success": True,
+            "imported": imported_items,
+            "errors": errors
+        }
+    except Exception as e:
+        print(f"[Integration] Error importing content: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/integrations/{integration_id}")
+async def disconnect_integration(
+    integration_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Disconnect an integration"""
+    connection = db.query(IntegrationConnection).filter(
+        IntegrationConnection.id == integration_id,
+        IntegrationConnection.user_id == current_user.id
+    ).first()
+    
+    if not connection:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    
+    connection.is_active = False
+    db.commit()
+    
+    return {"message": "Integration disconnected successfully"}
 
 
 # ===== POSTING ENDPOINTS =====
@@ -4587,7 +4979,7 @@ async def query_hyperspell_memories(
             )
         
         # Use email as user_id to match Hyperspell dashboard format
-        hyperspell_user_id = current_user.email
+        hyperspell_user_id = current_user.email.lower().strip()
         query_text = query.get("query", "")
         max_results = query.get("max_results", 5)
         
@@ -4607,6 +4999,172 @@ async def query_hyperspell_memories(
         raise
     except Exception as e:
         print(f"[API] Error querying Hyperspell memories: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/hyperspell/summaries")
+async def get_context_summaries(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get all 4 context summaries (Overall, Brand, Competitor, Market) using the same approach as marketing posts.
+    Uses get_all_memories_context() to get all memories, then GPT to summarize for each section.
+    """
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        if not hyperspell_service.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Hyperspell service is not available. Please set HYPERSPELL_API_KEY environment variable."
+            )
+        
+        if not openai_service:
+            raise HTTPException(
+                status_code=503,
+                detail="OpenAI service is not available. Please set OPENAI_API_KEY environment variable."
+            )
+        
+        # Use normalized email as user_id (same as marketing posts)
+        user_id = current_user.email.lower().strip()
+        print(f"[API] Getting context summaries for user: {user_id}")
+        
+        # Step 1: Get ALL memories using the same method as marketing posts
+        print(f"[API] Getting ALL Hyperspell memories (same as marketing posts)...")
+        all_memories_context = await hyperspell_service.get_all_memories_context(user_id)
+        
+        if not all_memories_context or len(all_memories_context.strip()) < 10:
+            print(f"[API] No memories found for user: {user_id}")
+            return {
+                "overall_summary": "No context available. Upload documents, add competitors, or generate posts to build your brand context.",
+                "brand_context": "No brand context available. Upload documents about your brand, products, or services.",
+                "competitor_context": "No competitor information available. Add competitors to see competitive analysis.",
+                "market_context": "No market context available. Add market research or industry information."
+            }
+        
+        print(f"[API] ✓ Retrieved all memories ({len(all_memories_context)} chars)")
+        
+        # Step 1.5: Get brand-specific context for better brand summary
+        brand_memories_context = await hyperspell_service.query_memories(user_id, "brand guidelines company information products services brand identity business context", max_results=50)
+        brand_context_text = ""
+        if brand_memories_context and brand_memories_context.get("answer"):
+            brand_context_text = str(brand_memories_context.get("answer", "")).strip()
+            print(f"[API] ✓ Retrieved brand-specific memories ({len(brand_context_text)} chars)")
+        
+        # Step 1.6: Get competitor-specific context for better competitor summary
+        competitor_memories_context = await hyperspell_service.query_memories(user_id, "competitors competitive analysis competitor", max_results=50)
+        competitor_context_text = ""
+        if competitor_memories_context and competitor_memories_context.get("answer"):
+            competitor_context_text = str(competitor_memories_context.get("answer", "")).strip()
+            print(f"[API] ✓ Retrieved competitor-specific memories ({len(competitor_context_text)} chars)")
+        
+        # Combine general context with brand-specific context for brand summary
+        combined_brand_context = f"{all_memories_context}\n\n{brand_context_text}" if brand_context_text else all_memories_context
+        
+        # Combine general context with competitor-specific context for competitor summary
+        combined_competitor_context = f"{all_memories_context}\n\n{competitor_context_text}" if competitor_context_text else all_memories_context
+        
+        # Step 2: Use GPT to generate summaries for each section (all using the same context)
+        import asyncio
+        
+        async def generate_summary(prompt: str, section_name: str) -> str:
+            """Helper to generate a summary using GPT"""
+            try:
+                # Custom system message for specific contexts
+                system_message = f"You are an expert at analyzing and summarizing brand context. Extract and summarize relevant information for {section_name}."
+                if "competitor" in section_name.lower():
+                    system_message = "You are an expert at identifying and summarizing competitor information. Your task is to extract ALL competitor names, competitive analysis, and competitive landscape information from the provided context. Be thorough and list specific competitor names when found."
+                elif "brand" in section_name.lower():
+                    system_message = "You are an expert at identifying and summarizing brand information. Your task is to extract ALL brand-specific details including brand guidelines, company information, products, services, company values, brand identity, and business context from the provided context. Be thorough and include specific brand details when found."
+                
+                completion = await openai_service.client.chat.completions.create(
+                    model=openai_service.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": system_message
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    temperature=0.7,
+                    max_tokens=500
+                )
+                summary = completion.choices[0].message.content.strip()
+                print(f"[API] ✓ Generated {section_name} summary ({len(summary)} chars)")
+                return summary
+            except Exception as e:
+                print(f"[API] Error generating {section_name} summary: {e}")
+                return f"Error generating {section_name} summary. Please try again."
+        
+        # Generate all 4 summaries in parallel
+        prompts = {
+            "overall_summary": f"""Based on the following brand context from all stored memories, provide a comprehensive overall summary (2-3 sentences) that captures the key information about this brand, business, and context:
+
+{all_memories_context[:8000]}
+
+Provide a concise overall summary that gives a high-level view of the brand, business, and stored context.""",
+            
+            "brand_context": f"""Based on the following context from all stored memories (including brand-specific queries), extract and summarize ONLY the brand-specific information (brand guidelines, company information, products, services, company values, brand identity, business context):
+
+{combined_brand_context[:8000]}
+
+Focus on brand identity, company information, products, services, and brand values. Provide a clear summary (2-3 sentences).""",
+            
+            "competitor_context": f"""Based on the following context from all stored memories (including competitor-specific queries), extract and summarize ALL competitor information:
+
+{combined_competitor_context[:8000]}
+
+Look for:
+- Lists of competitor names (e.g., "competitors include X, Y, Z")
+- Documents or memories tagged with "competitors" or "competitive analysis"
+- Any mentions of competing companies, brands, or products
+- Competitive landscape information
+- Market competitors
+
+IMPORTANT: If you find ANY competitor names, companies, or competitive information, include them in your summary. List the specific competitor names you find.
+
+Provide a clear summary (2-4 sentences) that includes the competitor names and any relevant competitive context. If no competitor information is found, state "No competitor information is found in the provided context." Otherwise, be specific about which competitors were identified.""",
+            
+            "market_context": f"""Based on the following context from all stored memories, extract and summarize ONLY the market information (market trends, industry analysis, market research, target audience, industry context):
+
+{all_memories_context[:8000]}
+
+Focus on market trends, industry analysis, target audience, and market research. Provide a clear summary (2-3 sentences). If no market information is found, state that."""
+        }
+        
+        # Run all summaries in parallel
+        tasks = [
+            generate_summary(prompts["overall_summary"], "Overall Summary"),
+            generate_summary(prompts["brand_context"], "Brand Context"),
+            generate_summary(prompts["competitor_context"], "Competitor Context"),
+            generate_summary(prompts["market_context"], "Market Context")
+        ]
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Extract results (handle exceptions)
+        overall_summary = results[0] if not isinstance(results[0], Exception) else "Error generating overall summary."
+        brand_context = results[1] if not isinstance(results[1], Exception) else "Error generating brand context summary."
+        competitor_context = results[2] if not isinstance(results[2], Exception) else "Error generating competitor context summary."
+        market_context = results[3] if not isinstance(results[3], Exception) else "Error generating market context summary."
+        
+        return {
+            "overall_summary": overall_summary,
+            "brand_context": brand_context,
+            "competitor_context": competitor_context,
+            "market_context": market_context
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error generating context summaries: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -4645,25 +5203,62 @@ async def upload_to_hyperspell(
             tmp_path = tmp_file.name
         
         try:
-            # Upload to Hyperspell
-            result = await hyperspell_service.upload_document(
-                user_id=hyperspell_user_id,
-                file_path=tmp_path,
-                filename=file.filename
-            )
+            # Extract text from document first (for PDFs, DOCX, etc.)
+            # This ensures the content is searchable in Hyperspell
+            file_ext = os.path.splitext(file.filename)[1].lower()
+            text_content = None
             
-            if result is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to upload document to Hyperspell"
+            # For PDF, DOCX, DOC, TXT - extract text and save as text memory
+            if file_ext in ('.pdf', '.docx', '.doc', '.txt', '.md'):
+                try:
+                    text_content = await document_service.extract_text(tmp_path, file.content_type or '')
+                    print(f"[API] Extracted {len(text_content)} characters from {file.filename}")
+                except Exception as e:
+                    print(f"[API] Warning: Failed to extract text from {file.filename}: {e}")
+                    # Continue with binary upload as fallback
+            
+            # If we have extracted text, save it as text memory (more searchable)
+            if text_content and len(text_content.strip()) > 0:
+                print(f"[API] Saving extracted text to Hyperspell as text memory")
+                result = await hyperspell_service.add_text_memory(
+                    user_id=hyperspell_user_id,
+                    text=f"Document: {file.filename}\n\n{text_content}",
+                    collection="documents"
                 )
-            
-            return {
-                "success": True,
-                "resource_id": result.get("resource_id"),
-                "filename": result.get("filename"),
-                "message": "Document uploaded successfully to Hyperspell memory layer"
-            }
+                
+                if result is None:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to save document text to Hyperspell"
+                    )
+                
+                return {
+                    "success": True,
+                    "resource_id": result.get("resource_id"),
+                    "filename": file.filename,
+                    "message": "Document text extracted and saved successfully to Hyperspell memory layer"
+                }
+            else:
+                # Fallback: Upload binary file (for unsupported formats or extraction failures)
+                print(f"[API] Uploading binary file to Hyperspell (text extraction not available)")
+                result = await hyperspell_service.upload_document(
+                    user_id=hyperspell_user_id,
+                    file_path=tmp_path,
+                    filename=file.filename
+                )
+                
+                if result is None:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to upload document to Hyperspell"
+                    )
+                
+                return {
+                    "success": True,
+                    "resource_id": result.get("resource_id"),
+                    "filename": result.get("filename"),
+                    "message": "Document uploaded successfully to Hyperspell memory layer"
+                }
         finally:
             # Clean up temporary file
             if os.path.exists(tmp_path):
@@ -4679,7 +5274,7 @@ async def upload_to_hyperspell(
 @app.post("/api/hyperspell/add-memory")
 async def add_hyperspell_memory(
     request: dict,
-    current_user: Optional[User] = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Add a text memory to Hyperspell memory layer.
