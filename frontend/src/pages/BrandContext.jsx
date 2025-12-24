@@ -89,16 +89,14 @@ function BrandContext() {
       setIntegrations(response.data || [])
       
       for (const integration of response.data || []) {
-        // Notion temporarily disabled for testing
-        // if (integration.platform === 'notion' && integration.is_active) {
-        //   try {
-        //     const pagesResponse = await api.get('/api/integrations/notion/pages')
-        //     setNotionPages(pagesResponse.data || [])
-        //   } catch (err) {
-        //     console.error('Failed to load Notion pages:', err)
-        //   }
-        // } else 
-        if (integration.platform === 'google_drive' && integration.is_active) {
+        if (integration.platform === 'notion' && integration.is_active) {
+          try {
+            const pagesResponse = await api.get('/api/integrations/notion/pages')
+            setNotionPages(pagesResponse.data || [])
+          } catch (err) {
+            console.error('Failed to load Notion pages:', err)
+          }
+        } else if (integration.platform === 'google_drive' && integration.is_active) {
           try {
             const filesResponse = await api.get('/api/integrations/google-drive/files')
             setGoogleDriveFiles(filesResponse.data || [])
@@ -1058,12 +1056,12 @@ function BrandContext() {
             Integrations
           </h2>
           <p className="text-sm text-[#4b5563] mb-6">
-            Connect Google Drive to import your brand context and documents automatically
+            Connect Notion or Google Drive to import your brand context and documents automatically
           </p>
 
           <div className="space-y-4">
-            {/* Notion Integration - Temporarily disabled for testing */}
-            {/* <div className="border border-[#e5e7eb] rounded-lg p-4">
+            {/* Notion Integration */}
+            <div className="border border-[#e5e7eb] rounded-lg p-4">
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <h3 className="text-lg font-semibold text-[#111827]">Notion</h3>
@@ -1185,7 +1183,7 @@ function BrandContext() {
                   )}
                 </div>
               )}
-            </div> */}
+            </div>
 
             {/* Google Drive Integration */}
             <div className="border border-[#e5e7eb] rounded-lg p-4">
