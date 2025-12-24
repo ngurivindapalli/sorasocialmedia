@@ -141,6 +141,53 @@ class FindCompetitorsRequest(BaseModel):
     document_id: str
 
 
+# ===== INTEGRATION SCHEMAS =====
+class IntegrationConnectionResponse(BaseModel):
+    id: int
+    platform: str
+    platform_user_email: Optional[str] = None
+    is_active: bool
+    connected_at: str
+    last_synced_at: Optional[str] = None
+
+
+class NotionPageResponse(BaseModel):
+    id: str
+    title: str
+    url: Optional[str] = None
+    last_edited_time: Optional[str] = None
+
+
+class GoogleDriveFileResponse(BaseModel):
+    id: str
+    name: str
+    mime_type: str
+    modified_time: Optional[str] = None
+    size: Optional[str] = None
+    web_view_link: Optional[str] = None
+
+
+class JiraIssueResponse(BaseModel):
+    id: str
+    key: str
+    summary: str
+    status: Optional[str] = None
+    project: Optional[str] = None
+    issue_type: Optional[str] = None
+    priority: Optional[str] = None
+    assignee: Optional[str] = None
+    reporter: Optional[str] = None
+    created: Optional[str] = None
+    updated: Optional[str] = None
+    url: Optional[str] = None
+
+
+class ImportContentRequest(BaseModel):
+    integration_id: int
+    item_ids: List[str] = Field(..., description="List of page/file IDs to import")
+    collection: Optional[str] = Field("documents", description="Hyperspell collection name")
+
+
 class SocialMediaConnectionResponse(BaseModel):
     """Social media connection response"""
     id: int
@@ -385,39 +432,6 @@ class ScriptApprovalRequest(BaseModel):
     script: str = Field(..., description="The script (original or edited)")
     approved: bool = Field(..., description="Whether the script is approved")
     original_script: Optional[str] = Field(None, description="Original script if editing")
-
-
-# ===== USER CONTEXT & PREFERENCES SCHEMAS =====
-class UserPreferencesRequest(BaseModel):
-    """Request to update user preferences"""
-    brand_voice: Optional[str] = Field(None, description="Brand voice description (e.g., 'professional but friendly', 'authoritative', 'conversational')")
-    content_style: Optional[str] = Field(None, description="Content style preference (e.g., 'educational', 'entertaining', 'inspirational')")
-    target_audience: Optional[str] = Field(None, description="Primary target audience")
-    preferred_video_length: Optional[int] = Field(None, description="Preferred video length in seconds")
-    video_model_preference: Optional[str] = Field(None, description="Preferred video model: 'sora-2' or 'veo-3'")
-    platform_preferences: Optional[Dict[str, bool]] = Field(None, description="Platform preferences (e.g., {'linkedin': True, 'instagram': False})")
-    content_themes: Optional[List[str]] = Field(None, description="Preferred content themes")
-    brand_colors: Optional[List[str]] = Field(None, description="Brand color palette")
-    tone_preferences: Optional[List[str]] = Field(None, description="Tone preferences (e.g., ['professional', 'authentic', 'engaging'])")
-
-
-class UserPreferencesResponse(BaseModel):
-    """Response with user preferences"""
-    preferences: Dict
-    message: str
-
-
-class UserContextResponse(BaseModel):
-    """Response with comprehensive user context"""
-    user_id: str
-    preferences: Dict
-    content_history: Dict
-    behavioral_patterns: Dict
-    brand_insights: Dict
-    performance_data: Dict
-    social_profiles: Dict
-    document_insights: Dict
-    metadata: Dict
 
 
 # ===== USER CONTEXT & PREFERENCES SCHEMAS =====

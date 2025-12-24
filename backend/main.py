@@ -26,6 +26,7 @@ from services.user_context_service import UserContextService
 from services.hyperspell_service import HyperspellService
 from services.notion_service import NotionService
 from services.google_drive_service import GoogleDriveService
+from services.jira_service import JiraService
 from utils.hyperspell_helper import get_hyperspell_context
 from utils.post_memory_helper import save_post_to_memory, is_first_post, get_post_performance_context
 from services.web_research_service import WebResearchService
@@ -50,6 +51,7 @@ from models.schemas import (
     IntegrationConnectionResponse,
     NotionPageResponse,
     GoogleDriveFileResponse,
+    JiraIssueResponse,
     ImportContentRequest
 )
 from database import init_db, get_db, User, SocialMediaConnection, PostHistory, IntegrationConnection
@@ -205,6 +207,7 @@ hyperspell_service = HyperspellService()
 # Initialize integration services
 notion_service = NotionService()
 google_drive_service = GoogleDriveService()
+jira_service = JiraService()
 # Initialize user context service with Hyperspell integration
 user_context_service = UserContextService(hyperspell_service=hyperspell_service)
 # Check for fine-tuned model in environment
@@ -1980,9 +1983,9 @@ async def integration_authorize(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Initiate OAuth flow for Notion or Google Drive"""
-    if platform not in ["notion", "google_drive"]:
-        raise HTTPException(status_code=400, detail="Invalid platform. Supported: notion, google_drive")
+    """Initiate OAuth flow for Notion, Google Drive, or Jira"""
+    if platform not in ["notion", "google_drive", "jira"]:
+        raise HTTPException(status_code=400, detail="Invalid platform. Supported: notion, google_drive, jira")
     
     # Generate state token
     state = secrets.token_urlsafe(32)
@@ -2008,6 +2011,13 @@ async def integration_authorize(
                     detail="Google Drive OAuth not configured. Set GOOGLE_DRIVE_CLIENT_ID and GOOGLE_DRIVE_CLIENT_SECRET"
                 )
             auth_url = google_drive_service.get_authorization_url(state)
+        elif platform == "jira":
+            if not jira_service.client_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Jira OAuth not configured. Set JIRA_CLIENT_ID and JIRA_CLIENT_SECRET"
+                )
+            auth_url = jira_service.get_authorization_url(state)
         
         return {"auth_url": auth_url, "state": state}
     except Exception as e:
@@ -2023,7 +2033,7 @@ async def integration_callback(
     db: Session = Depends(get_db)
 ):
     """Handle OAuth callback for integrations"""
-    if platform not in ["notion", "google_drive"]:
+    if platform not in ["notion", "google_drive", "jira"]:
         raise HTTPException(status_code=400, detail="Invalid platform")
     
     # Verify state
@@ -2109,6 +2119,60 @@ async def integration_callback(
                     access_token=access_token,
                     refresh_token=refresh_token,
                     token_expires_at=expires_at
+                )
+                db.add(existing)
+            
+            db.commit()
+        
+        elif platform == "jira":
+            token_data = await jira_service.exchange_code_for_token(code)
+            if not token_data:
+                raise HTTPException(status_code=400, detail="Failed to exchange code for token")
+            
+            access_token = token_data.get("access_token")
+            refresh_token = token_data.get("refresh_token")
+            
+            # Get accessible resources (Jira sites)
+            resources = await jira_service.get_accessible_resources(access_token)
+            if not resources:
+                raise HTTPException(status_code=400, detail="No accessible Jira sites found")
+            
+            # Use the first accessible resource (cloud_id)
+            cloud_id = resources[0].get("id")
+            site_url = resources[0].get("url", "")
+            
+            # Get user info
+            user_info = await jira_service.get_user_info(access_token, cloud_id)
+            
+            # Calculate token expiry
+            expires_in = token_data.get("expires_in", 3600)
+            expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+            
+            # Save or update connection
+            existing = db.query(IntegrationConnection).filter(
+                IntegrationConnection.user_id == user_id,
+                IntegrationConnection.platform == "jira"
+            ).first()
+            
+            if existing:
+                existing.access_token = access_token
+                existing.refresh_token = refresh_token
+                existing.token_expires_at = expires_at
+                existing.is_active = True
+                existing.platform_user_id = cloud_id
+                existing.platform_user_email = user_info.get("emailAddress") if user_info else None
+                # Store cloud_id in metadata or as platform_user_id
+                if hasattr(existing, 'metadata'):
+                    existing.metadata = json.dumps({"cloud_id": cloud_id, "site_url": site_url})
+            else:
+                existing = IntegrationConnection(
+                    user_id=user_id,
+                    platform="jira",
+                    access_token=access_token,
+                    refresh_token=refresh_token,
+                    token_expires_at=expires_at,
+                    platform_user_id=cloud_id,
+                    platform_user_email=user_info.get("emailAddress") if user_info else None
                 )
                 db.add(existing)
             
@@ -2238,13 +2302,67 @@ async def list_google_drive_files(
     ]
 
 
+@app.get("/api/integrations/jira/issues", response_model=List[JiraIssueResponse])
+async def list_jira_issues(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    jql: Optional[str] = None
+):
+    """List issues from user's Jira workspace"""
+    connection = db.query(IntegrationConnection).filter(
+        IntegrationConnection.user_id == current_user.id,
+        IntegrationConnection.platform == "jira",
+        IntegrationConnection.is_active == True
+    ).first()
+    
+    if not connection:
+        raise HTTPException(status_code=404, detail="Jira not connected")
+    
+    # Get cloud_id from platform_user_id (stored during OAuth)
+    cloud_id = connection.platform_user_id
+    if not cloud_id:
+        raise HTTPException(status_code=400, detail="Jira cloud ID not found. Please reconnect.")
+    
+    # Refresh token if needed
+    access_token = connection.access_token
+    if connection.token_expires_at and connection.token_expires_at < datetime.utcnow():
+        if connection.refresh_token:
+            token_data = await jira_service.refresh_access_token(connection.refresh_token)
+            if token_data:
+                access_token = token_data.get("access_token")
+                connection.access_token = access_token
+                expires_in = token_data.get("expires_in", 3600)
+                connection.token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+                db.commit()
+    
+    issues = await jira_service.search_issues(access_token, cloud_id, jql or "")
+    
+    return [
+        JiraIssueResponse(
+            id=issue.get("id", ""),
+            key=issue.get("key", ""),
+            summary=issue.get("fields", {}).get("summary", ""),
+            status=issue.get("fields", {}).get("status", {}).get("name") if issue.get("fields", {}).get("status") else None,
+            project=issue.get("fields", {}).get("project", {}).get("name") if issue.get("fields", {}).get("project") else None,
+            issue_type=issue.get("fields", {}).get("issuetype", {}).get("name") if issue.get("fields", {}).get("issuetype") else None,
+            priority=issue.get("fields", {}).get("priority", {}).get("name") if issue.get("fields", {}).get("priority") else None,
+            assignee=issue.get("fields", {}).get("assignee", {}).get("displayName") if issue.get("fields", {}).get("assignee") else None,
+            reporter=issue.get("fields", {}).get("reporter", {}).get("displayName") if issue.get("fields", {}).get("reporter") else None,
+            created=issue.get("fields", {}).get("created"),
+            updated=issue.get("fields", {}).get("updated"),
+            url=None  # Can construct from site URL and issue key if needed
+        )
+        for issue in issues
+    ]
+
+
 @app.post("/api/integrations/import")
 async def import_content(
     request: ImportContentRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Import content from Notion or Google Drive to Hyperspell"""
+    """Import content from Notion, Google Drive, or Jira to Hyperspell"""
     connection = db.query(IntegrationConnection).filter(
         IntegrationConnection.id == request.integration_id,
         IntegrationConnection.user_id == current_user.id,
@@ -2318,9 +2436,45 @@ async def import_content(
                 except Exception as e:
                     errors.append({"id": file_id, "error": str(e)})
         
+        elif connection.platform == "jira":
+            # Get cloud_id from platform_user_id
+            cloud_id = connection.platform_user_id
+            if not cloud_id:
+                errors.append({"error": "Jira cloud ID not found. Please reconnect."})
+            else:
+                access_token = connection.access_token
+                # Refresh token if needed
+                if connection.token_expires_at and connection.token_expires_at < datetime.utcnow():
+                    if connection.refresh_token:
+                        token_data = await jira_service.refresh_access_token(connection.refresh_token)
+                        if token_data:
+                            access_token = token_data.get("access_token")
+                            connection.access_token = access_token
+                            expires_in = token_data.get("expires_in", 3600)
+                            connection.token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+                            db.commit()
+                
+                # item_ids are issue keys (e.g., "PROJ-123")
+                for issue_key in request.item_ids:
+                    try:
+                        content = await jira_service.get_issue_content(access_token, cloud_id, issue_key)
+                        if content:
+                            # Upload to Hyperspell
+                            memory_id = await hyperspell_service.add_text_memory(
+                                user_id=user_id,
+                                text=content,
+                                collection=request.collection or "documents"
+                            )
+                            imported_items.append({"id": issue_key, "memory_id": memory_id, "name": issue_key})
+                        else:
+                            errors.append({"id": issue_key, "error": "Failed to fetch content"})
+                    except Exception as e:
+                        errors.append({"id": issue_key, "error": str(e)})
+        
         # Update last_synced_at
-        connection.last_synced_at = datetime.utcnow()
-        db.commit()
+        if connection:
+            connection.last_synced_at = datetime.utcnow()
+            db.commit()
         
         return {
             "success": True,
