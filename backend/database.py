@@ -30,6 +30,7 @@ class User(Base):
     # Relationships
     social_connections = relationship("SocialMediaConnection", back_populates="user", cascade="all, delete-orphan")
     posts = relationship("PostHistory", back_populates="user", cascade="all, delete-orphan")
+    integrations = relationship("IntegrationConnection", back_populates="user", cascade="all, delete-orphan")
 
 
 class SocialMediaConnection(Base):
@@ -75,6 +76,28 @@ class PostHistory(Base):
     # Relationships
     user = relationship("User", back_populates="posts")
     connection = relationship("SocialMediaConnection", back_populates="posts")
+
+
+class IntegrationConnection(Base):
+    """Third-party integration connections (Notion, Google Drive, etc.)"""
+    __tablename__ = "integration_connections"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    platform = Column(String, nullable=False)  # 'notion', 'google_drive'
+    access_token = Column(Text, nullable=False)  # Encrypted in production
+    refresh_token = Column(Text, nullable=True)
+    token_expires_at = Column(DateTime, nullable=True)
+    platform_user_id = Column(String, nullable=True)  # User ID from the platform
+    platform_user_email = Column(String, nullable=True)  # User email from the platform
+    is_active = Column(Boolean, default=True)
+    connected_at = Column(DateTime, default=datetime.utcnow)
+    last_synced_at = Column(DateTime, nullable=True)
+    
+    # Relationships
+    user = relationship("User", back_populates="integrations")
+
+
 
 
 # Create all tables
