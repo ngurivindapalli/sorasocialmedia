@@ -43,3 +43,18 @@ DATABASE_URL=sqlite:///./videohook.db
 GOOGLE_CLOUD_PROJECT_ID=aimarketing-480803
 VEO3_LOCATION=us-central1
 
+# Notion Integration (Internal Integration Token - simpler, no OAuth needed)
+NOTION_SECRET=your-notion-secret-token-here
+
+# OR use OAuth (requires setting up OAuth app in Notion):
+# NOTION_CLIENT_ID=your-notion-oauth-client-id
+# NOTION_CLIENT_SECRET=your-notion-oauth-client-secret
+# NOTION_REDIRECT_URI=http://localhost:3001/auth/notion/callback
+
+# Google Drive OAuth (for importing documents from Google Drive)
+GOOGLE_DRIVE_CLIENT_ID=1076225983154-s584rfppe6ep9gg0b14vqhkv26p1enig.apps.googleusercontent.com
+GOOGLE_DRIVE_CLIENT_SECRET=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
+GOOGLE_DRIVE_REDIRECT_URI=http://localhost:8000/api/integrations/google_drive/callback
+FRONTEND_URL=http://localhost:3000
+BACKEND_URL=http://localhost:8000
+
