@@ -53,6 +53,15 @@ function BrandContext() {
     }
   }, [user])
 
+  // Automatically upload document when one is selected
+  useEffect(() => {
+    if (uploadedDoc && !uploadingDoc && !sendingDoc) {
+      console.log('[BrandContext] Document selected, automatically starting upload...')
+      handleDocumentUpload()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadedDoc]) // Only trigger when uploadedDoc changes (handleDocumentUpload is stable)
+
   const loadUserSettings = async () => {
     try {
       const userData = await authUtils.getCurrentUserFromAPI()
@@ -474,9 +483,11 @@ function BrandContext() {
   const handleDocumentUpload = async () => {
     if (!uploadedDoc) return
 
+    const file = uploadedDoc // Use the uploadedDoc state
     try {
       setUploadingDoc(true)
       setError('')
+      setUploadSuccess('') // Clear any previous success message
       
       // Step 1: Upload to local document storage
       const fileBuffer = await file.arrayBuffer()
@@ -513,51 +524,75 @@ function BrandContext() {
           },
         })
         
-        if (hyperspellResponse.data?.resource_id) {
-          console.log('[BrandContext] Document saved to Hyperspell:', hyperspellResponse.data.resource_id)
-          
-          // Step 3: Save to sent documents list
-          const newDoc = {
-            id: documentId,
-            name: file.name,
-            sentAt: new Date().toISOString(),
-            resourceId: hyperspellResponse.data.resource_id
-          }
-          const updated = [...sentDocuments, newDoc]
-          setSentDocuments(updated)
-          localStorage.setItem('videohook_sent_documents', JSON.stringify(updated))
-          
-          // Step 4: Now remove the document from upload state (after successful save)
-          setUploadedDoc(null)
-          setUploadedDocName('')
-          setUploadedDocId(null)
-          
-          // Reload summaries after adding document
-          await loadSummaries()
-          
-          // Show success notification
-          const fileName = uploadedDocName || file.name
-          setUploadSuccess(`Document "${fileName}" uploaded successfully and saved to Hyperspell!`)
-          setTimeout(() => setUploadSuccess(''), 5000) // Clear after 5 seconds
-          
-          console.log('[BrandContext] Document successfully saved to Hyperspell and removed from upload state')
-        } else {
-          throw new Error('Failed to save document to Hyperspell')
+        // Verify response has resource_id and verified flag
+        if (!hyperspellResponse.data?.resource_id) {
+          throw new Error('Failed to save document to Hyperspell: No resource_id returned')
         }
+        
+        const verified = hyperspellResponse.data?.verified !== false // Default to true if not specified
+        const resourceId = hyperspellResponse.data.resource_id
+        
+        if (!verified) {
+          console.warn('[BrandContext] Document saved but verification incomplete. Resource ID:', resourceId)
+        }
+        
+        console.log('[BrandContext] Document saved to Hyperspell:', resourceId, verified ? '(verified)' : '(verification pending)')
+        
+        // Save filename before clearing state
+        const fileName = uploadedDocName || file.name
+        
+        // Step 3: Save to sent documents list
+        const newDoc = {
+          id: documentId,
+          name: file.name,
+          sentAt: new Date().toISOString(),
+          resourceId: resourceId
+        }
+        const updated = [...sentDocuments, newDoc]
+        setSentDocuments(updated)
+        localStorage.setItem('videohook_sent_documents', JSON.stringify(updated))
+        
+        // Step 4: Now remove the document from upload state (after successful save)
+        setUploadedDoc(null)
+        setUploadedDocName('')
+        setUploadedDocId(null)
+        
+        // Show success notification with verification status (do this before setTimeout)
+        const successMessage = verified 
+          ? `Document "${fileName}" uploaded successfully and verified in unified brand context!`
+          : `Document "${fileName}" uploaded (verification pending)`
+        setUploadSuccess(successMessage)
+        console.log('[BrandContext] Success message set:', successMessage)
+        
+        // Clear success message after 5 seconds
+        setTimeout(() => {
+          setUploadSuccess('')
+        }, 5000)
+        
+        // Reload summaries after adding document (wait a moment for Hyperspell to process)
+        setTimeout(async () => {
+          await loadSummaries()
+        }, 2000)
+        
+        console.log('[BrandContext] Document successfully saved to unified brand context and removed from upload state')
       } catch (hyperspellErr) {
         console.error('Failed to save document to Hyperspell:', hyperspellErr)
         // Keep the document in state so user can retry
         setUploadedDoc(file)
         setUploadedDocName(file.name)
         setUploadedDocId(documentId)
-        setError('Document uploaded locally but failed to save to Hyperspell. The document is still available - please try uploading again.')
+        const errorMsg = hyperspellErr.response?.data?.detail || hyperspellErr.message || 'Failed to save document to Hyperspell. The document is still available - please try uploading again.'
+        setError(errorMsg)
+        setUploadSuccess('') // Clear any success message
         throw hyperspellErr
       } finally {
         setSendingDoc(false)
       }
     } catch (err) {
       console.error('Failed to upload document:', err)
-      setError(err.response?.data?.detail || 'Failed to upload document. Please try again.')
+      const errorMsg = err.response?.data?.detail || err.message || 'Failed to upload document. Please try again.'
+      setError(errorMsg)
+      setUploadSuccess('') // Clear any success message on error
     } finally {
       setUploadingDoc(false)
     }
@@ -583,24 +618,43 @@ function BrandContext() {
         },
       })
       
-      if (response.data?.resource_id) {
-        const newDoc = {
-          id: uploadedDocId,
-          name: uploadedDocName,
-          sentAt: new Date().toISOString(),
-          resourceId: response.data.resource_id
-        }
-        const updated = [...sentDocuments, newDoc]
-        setSentDocuments(updated)
-        localStorage.setItem('videohook_sent_documents', JSON.stringify(updated))
-        
-        setUploadedDoc(null)
-        setUploadedDocName('')
-        setUploadedDocId(null)
-        
-        // Reload summaries after adding document
-        await loadSummaries()
+      // Verify response has resource_id
+      if (!response.data?.resource_id) {
+        throw new Error('Failed to save document to Hyperspell: No resource_id returned')
       }
+      
+      const verified = response.data?.verified !== false // Default to true if not specified
+      const resourceId = response.data.resource_id
+      
+      if (!verified) {
+        console.warn('[BrandContext] Document saved but verification incomplete. Resource ID:', resourceId)
+      }
+      
+      const newDoc = {
+        id: uploadedDocId,
+        name: uploadedDocName,
+        sentAt: new Date().toISOString(),
+        resourceId: resourceId
+      }
+      const updated = [...sentDocuments, newDoc]
+      setSentDocuments(updated)
+      localStorage.setItem('videohook_sent_documents', JSON.stringify(updated))
+      
+      setUploadedDoc(null)
+      setUploadedDocName('')
+      setUploadedDocId(null)
+      
+      // Reload summaries after adding document (wait a moment for Hyperspell to process)
+      setTimeout(async () => {
+        await loadSummaries()
+      }, 2000)
+      
+      // Show success notification
+      const successMessage = verified 
+        ? `Document "${uploadedDocName}" saved and verified in Hyperspell!`
+        : `Document "${uploadedDocName}" saved (verification pending)`
+      setUploadSuccess(successMessage)
+      setTimeout(() => setUploadSuccess(''), 5000)
     } catch (err) {
       console.error('Failed to send document:', err)
       setError(err.response?.data?.detail || 'Failed to send document to Hyperspell')
@@ -622,7 +676,10 @@ function BrandContext() {
       }
       
       await saveCompetitorsToHyperspell(updated)
-      await loadSummaries()
+      // Reload summaries after adding competitor (wait a moment for Hyperspell to process)
+      setTimeout(async () => {
+        await loadSummaries()
+      }, 2000)
     }
   }
 
@@ -866,6 +923,20 @@ function BrandContext() {
           )}
         </div>
       </div>
+
+      {/* Success Message */}
+      {uploadSuccess && (
+        <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg flex items-start gap-2">
+          <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+          <p className="text-sm text-green-700 flex-1">{uploadSuccess}</p>
+          <button
+            onClick={() => setUploadSuccess('')}
+            className="ml-auto text-green-600 hover:text-green-800"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Error Message */}
       {error && (

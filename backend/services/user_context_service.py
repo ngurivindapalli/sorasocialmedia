@@ -1,7 +1,7 @@
 """
 User Context Service - Builds comprehensive user profiles for better content generation
 Collects and analyzes user behavior, preferences, and content history to enhance AI outputs
-Now enhanced with Hyperspell for persistent memory and context
+Now enhanced with Memory (S3 + Mem0) for persistent memory and context
 """
 
 import os
@@ -17,10 +17,10 @@ class UserContextService:
         self.context_dir = os.path.join(os.path.dirname(__file__), '..', 'user_contexts')
         os.makedirs(self.context_dir, exist_ok=True)
         
-        # Hyperspell integration for enhanced memory
-        self.hyperspell_service = hyperspell_service
-        if self.hyperspell_service and self.hyperspell_service.is_available():
-            print("[UserContext] OK User context service initialized with Hyperspell")
+        # Memory service integration for enhanced memory (S3 + Mem0)
+        self.memory_service = hyperspell_service  # Parameter name kept for compatibility, but uses MemoryService
+        if self.memory_service and self.memory_service.is_available():
+            print("[UserContext] OK User context service initialized with Memory (S3 + Mem0)")
         else:
             print("[UserContext] OK User context service initialized")
     
@@ -275,28 +275,28 @@ class UserContextService:
     async def get_context_summary_for_ai(self, user_id: str, query: Optional[str] = None) -> str:
         """
         Generate a comprehensive context summary for AI prompt injection
-        Enhanced with Hyperspell memory queries if available
+        Enhanced with Memory (S3 + Mem0) queries if available
         
         Args:
             user_id: User identifier
-            query: Optional query string to fetch relevant Hyperspell memories
+            query: Optional query string to fetch relevant memories from Mem0
         """
         context = self._load_user_context(user_id)
         
         summary_parts = []
         
-        # Hyperspell Memory Context (if available and query provided)
-        if self.hyperspell_service and self.hyperspell_service.is_available() and query:
+        # Memory Context (S3 + Mem0) - if available and query provided
+        if self.memory_service and self.memory_service.is_available() and query:
             try:
-                hyperspell_context = await self.hyperspell_service.get_context_summary(user_id, query)
-                if hyperspell_context:
-                    summary_parts.append(hyperspell_context)
+                memory_context = await self.memory_service.get_context_summary(user_id, query)
+                if memory_context:
+                    summary_parts.append(memory_context)
                     summary_parts.append("")
             except Exception as e:
-                print(f"[UserContext] Error fetching Hyperspell context: {e}")
+                print(f"[UserContext] Error fetching Memory context: {e}")
         
         if not context.get("user_id"):
-            # If no local context but we have Hyperspell results, return those
+            # If no local context but we have Memory results, return those
             if summary_parts:
                 return "\n".join(summary_parts)
             return ""  # No context available

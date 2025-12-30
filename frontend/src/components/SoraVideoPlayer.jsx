@@ -8,15 +8,17 @@ import InstagramManualPostButton from './InstagramManualPostButton.jsx'
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 function SoraVideoPlayer({ videoJob, onStatusChange }) {
-  const [status, setStatus] = useState(videoJob.status)
-  const [progress, setProgress] = useState(videoJob.progress || 0)
+  const [status, setStatus] = useState(videoJob?.status || 'queued')
+  const [progress, setProgress] = useState(videoJob?.progress || 0)
   const [videoUrl, setVideoUrl] = useState(null)
   const [error, setError] = useState(null)
   const pollingIntervalRef = useRef(null)
 
   useEffect(() => {
+    if (!videoJob) return
+    
     // Update status and progress from videoJob prop
-    setStatus(videoJob.status)
+    setStatus(videoJob.status || 'queued')
     setProgress(videoJob.progress || 0)
     
     // Notify parent of initial status

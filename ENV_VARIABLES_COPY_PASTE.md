@@ -89,6 +89,15 @@ GOOGLE_CLOUD_PROJECT_ID=aimarketing-480803
 # OPTIONAL - Frontend URL (for CORS)
 # ============================================
 # FRONTEND_URL=http://localhost:3001
+
+# ============================================
+# OPTIONAL - Google Drive OAuth (for importing documents)
+# ============================================
+GOOGLE_DRIVE_CLIENT_ID=1076225983154-s584rfppe6ep9gg0b14vqhkv26p1enig.apps.googleusercontent.com
+GOOGLE_DRIVE_CLIENT_SECRET=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
+GOOGLE_DRIVE_REDIRECT_URI=http://localhost:8000/api/integrations/google_drive/callback
+FRONTEND_URL=http://localhost:3000
+BACKEND_URL=http://localhost:8000
 ```
 
 ---

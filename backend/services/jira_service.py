@@ -288,3 +288,7 @@ class JiraService:
         else:
             return "\n".join(text_parts)
 
+
+
+
+

@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Req
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional
 import os
@@ -23,24 +24,33 @@ from services.image_generation_service import ImageGenerationService
 from services.video_composition_service import VideoCompositionService
 from services.document_service import DocumentService
 from services.user_context_service import UserContextService
-from services.hyperspell_service import HyperspellService
+from services.memory_service import MemoryService  # Unified service (S3 + Mem0)
+from services.bedrock_service import BedrockService
 from services.notion_service import NotionService
 from services.google_drive_service import GoogleDriveService
 from services.jira_service import JiraService
-from utils.hyperspell_helper import get_hyperspell_context
-from utils.post_memory_helper import save_post_to_memory, is_first_post, get_post_performance_context
+from utils.hyperspell_helper import get_hyperspell_context as get_memory_context
+from utils.post_memory_helper import save_post_to_memory, is_first_post, get_post_performance_context, find_existing_post_with_image
+from utils.veo_helper import wait_for_video_completion_with_extensions
 from services.web_research_service import WebResearchService
+from services.seo_aeo_service import SEOAEOService
 from models.schemas import (
     MarketingPostRequest,
     MarketingPostResponse,
     MarketingPostSuggestion,
     MarketingPostSuggestionsResponse,
+    AigisMarketingRequest,
+    AigisMarketingResponse,
+    AigisMarketingPostRequest,
+    AigisMarketingSuggestionsRequest,
+    AigisMarketingSuggestionsResponse,
     VideoAnalysisRequest, VideoAnalysisResponse, ScrapedVideo, VideoResult,
     UserSignupRequest, UserLoginRequest, SocialMediaConnectionResponse,
     PostVideoRequest, PostVideoResponse,
     ManualInstagramPostRequest, ManualInstagramPostResponse,
     Veo3GenerateRequest, Veo3GenerateResponse, Veo3StatusResponse,
     Veo3ExtendRequest, Veo3ExtendResponse,
+    Veo3GenerateWithContextRequest, Veo3GenerateWithContextResponse,
     ImageGenerateRequest, ImageGenerateResponse,
     SmartVideoCompositionRequest, SmartVideoCompositionResponse,
     InformationalVideoRequest, InformationalVideoResponse,
@@ -52,7 +62,17 @@ from models.schemas import (
     NotionPageResponse,
     GoogleDriveFileResponse,
     JiraIssueResponse,
-    ImportContentRequest
+    ImportContentRequest,
+    SEOAEOAnalysisRequest,
+    SEOAEOAnalysisResponse,
+    SEOAEOStatusRequest,
+    SEOAEOStatusResponse,
+    SEOAEOSummary,
+    PromptResult,
+    TopicMentionStats,
+    CompetitorStats,
+    SourceStats,
+    SourceCitation
 )
 from database import init_db, get_db, User, SocialMediaConnection, PostHistory, IntegrationConnection
 from auth_utils import get_password_hash, verify_password, create_access_token, get_current_user
@@ -65,6 +85,68 @@ import uuid
 # Get the directory where main.py is located
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(BASE_DIR, '.env')
+
+# Helper function to save image to local file
+def save_image_to_file(image_base64: str, topic: str, user_id: str = "default") -> str:
+    """
+    Save base64 image to local file and return the URL path
+    
+    Args:
+        image_base64: Base64 encoded image data
+        topic: Topic name for filename
+        user_id: User ID for organizing files
+    
+    Returns:
+        URL path to access the image (e.g., "/static/images/marketing-posts/topic_hash.png")
+    """
+    import base64
+    import hashlib
+    
+    # Create a hash from topic and user_id for consistent filenames
+    filename_base = hashlib.md5(f"{user_id}_{topic}".encode()).hexdigest()[:12]
+    safe_topic = "".join(c for c in topic[:30] if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
+    filename = f"{safe_topic}_{filename_base}.png"
+    
+    # Ensure directory exists
+    images_dir = os.path.join(BASE_DIR, "static", "images", "marketing-posts")
+    os.makedirs(images_dir, exist_makok=True)
+    
+    # Save image file
+    file_path = os.path.join(images_dir, filename)
+    image_data = base64.b64decode(image_base64)
+    with open(file_path, 'wb') as f:
+        f.write(image_data)
+    
+    # Return URL path (relative to API base)
+    image_url = f"/static/images/marketing-posts/{filename}"
+    print(f"[API] ✓ Image saved to: {file_path}")
+    print(f"[API] ✓ Image URL: {image_url}")
+    return image_url
+
+def get_image_file_path(topic: str, user_id: str = "default") -> Optional[str]:
+    """
+    Check if an image file already exists for the given topic/user_id
+    
+    Args:
+        topic: Topic name
+        user_id: User ID
+    
+    Returns:
+        URL path if file exists, None otherwise
+    """
+    import hashlib
+    
+    # Create the same hash as save_image_to_file
+    filename_base = hashlib.md5(f"{user_id}_{topic}".encode()).hexdigest()[:12]
+    safe_topic = "".join(c for c in topic[:30] if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
+    filename = f"{safe_topic}_{filename_base}.png"
+    
+    file_path = os.path.join(BASE_DIR, "static", "images", "marketing-posts", filename)
+    if os.path.exists(file_path):
+        image_url = f"/static/images/marketing-posts/{filename}"
+        print(f"[API] ✓ Found existing image file: {image_url}")
+        return image_url
+    return None
 print(f"[DEBUG] Loading .env from: {env_path}")
 print(f"[DEBUG] .env file exists: {os.path.exists(env_path)}")
 
@@ -141,12 +223,7 @@ if ANTHROPIC_API_KEY:
 else:
     print("[DEBUG] ANTHROPIC_API_KEY not found. Claude features will be disabled.")
 
-# Get Hyperspell API key
-HYPERSPELL_API_KEY = os.getenv('HYPERSPELL_API_KEY')
-if HYPERSPELL_API_KEY:
-    print(f"[DEBUG] Hyperspell API key found: {HYPERSPELL_API_KEY[:20]}...{HYPERSPELL_API_KEY[-4:]}")
-else:
-    print("[DEBUG] HYPERSPELL_API_KEY not found. Hyperspell memory features will be disabled.")
+# Memory service uses S3 + Mem0 (no API key needed - uses AWS credentials and Mem0 API key)
 
 app = FastAPI(title="Instagram Video to Sora Script Generator")
 
@@ -190,6 +267,14 @@ app.add_middleware(
 # Initialize database
 init_db()
 
+# Create static images directory if it doesn't exist
+STATIC_IMAGES_DIR = os.path.join(BASE_DIR, "static", "images", "marketing-posts")
+os.makedirs(STATIC_IMAGES_DIR, exist_ok=True)
+print(f"[API] Static images directory: {STATIC_IMAGES_DIR}")
+
+# Mount static files for serving images
+app.mount("/static/images", StaticFiles(directory=STATIC_IMAGES_DIR), name="static_images")
+
 # Initialize services
 instagram_service = InstagramAPIService()
 linkedin_service = LinkedInAPIService()
@@ -202,14 +287,15 @@ veo3_service = Veo3Service()
 image_generation_service = ImageGenerationService()
 video_composition_service = VideoCompositionService()
 document_service = DocumentService()
-# Initialize Hyperspell service
-hyperspell_service = HyperspellService()
+# Initialize memory service (S3 + Mem0)
+print("[API] Using MemoryService (S3 + Mem0)")
+memory_service = MemoryService()
 # Initialize integration services
 notion_service = NotionService()
 google_drive_service = GoogleDriveService()
 jira_service = JiraService()
-# Initialize user context service with Hyperspell integration
-user_context_service = UserContextService(hyperspell_service=hyperspell_service)
+# Initialize user context service with Memory integration
+user_context_service = UserContextService(hyperspell_service=memory_service)
 # Check for fine-tuned model in environment
 fine_tuned_model = os.getenv("OPENAI_FINE_TUNED_MODEL")
 # Only initialize OpenAI service if API key is available
@@ -219,10 +305,18 @@ if OPENAI_API_KEY:
         api_key=OPENAI_API_KEY, 
         anthropic_key=ANTHROPIC_API_KEY, 
         fine_tuned_model=fine_tuned_model,
-        hyperspell_service=hyperspell_service  # Pass Hyperspell for Claude integration
+        hyperspell_service=memory_service  # Pass Memory service for context integration (parameter name kept for compatibility)
     )
+# Initialize SEO/AEO service
+seo_aeo_service = None
+if OPENAI_API_KEY:
+    seo_aeo_service = SEOAEOService(openai_api_key=OPENAI_API_KEY)
+    print("[API] SEO/AEO service initialized")
 else:
     print("[INFO] OpenAI service not initialized - API key missing")
+
+# Initialize Bedrock service for Claude (preferred for script generation)
+bedrock_service = BedrockService()
 
 # Initialize web research service AFTER openai_service (needs it for AI analysis)
 web_research_service = WebResearchService(openai_service=openai_service if openai_service else None)
@@ -247,7 +341,7 @@ async def root():
             "image_generation": "✓ Active" if image_generation_service.project_id else "⚠ Disabled - GOOGLE_CLOUD_PROJECT_ID not set",
             "gemini_3_pro_image": "✓ Active" if image_generation_service.project_id else "⚠ Disabled - GOOGLE_CLOUD_PROJECT_ID not set (uses Vertex AI)",
             "smart_composition": "✓ Active" if video_composition_service.openai_client else "⚠ Disabled",
-            "hyperspell": "✓ Active" if hyperspell_service.is_available() else "⚠ Disabled - HYPERSPELL_API_KEY not set",
+            "memory": "✓ Active" if memory_service.is_available() else "⚠ Disabled - Check S3 and Mem0 configuration",
         },
         "model": openai_service.model if openai_service else "Not configured"
     }
@@ -295,17 +389,17 @@ async def analyze_videos(request: VideoAnalysisRequest):
         page_context = await openai_service.research_profile_context(profile_context, document_context)
         print(f"[API] ✓ Profile context researched: {len(page_context)} characters")
         
-        # Step 3.5: Get Hyperspell memory context for enhanced personalization (reusable helper)
+        # Step 3.5: Get Memory (S3 + Mem0) context for enhanced personalization (reusable helper)
         memory_query = f"{profile_context.get('biography', '')[:100]} {document_context[:100] if document_context else ''}".strip()
         if memory_query:
-            hyperspell_memory_context = await get_hyperspell_context(
-                hyperspell_service=hyperspell_service,
+            memory_context = await get_memory_context(
+                memory_service=memory_service,
                 query=memory_query,
                 user_email=None  # Can add user auth later
             )
-            if hyperspell_memory_context:
-                # Enhance page_context with Hyperspell memory
-                page_context = f"""{hyperspell_memory_context}
+            if memory_context:
+                # Enhance page_context with Memory
+                page_context = f"""{memory_context}
 
 {page_context}"""
         
@@ -359,16 +453,16 @@ async def analyze_videos(request: VideoAnalysisRequest):
                 print(f"[API] Transcribing video...")
                 transcription = await openai_service.transcribe_video(video_path)
                 
-                # Get user_id for Hyperspell memory enhancement (if authenticated)
+                # Get user_id for Memory (S3 + Mem0) enhancement (if authenticated)
                 user_id_for_memory = None
                 try:
                     # TODO: Get actual user_id from authentication token when available
-                    # For now, we'll enhance with Hyperspell if available
+                    # For now, we'll enhance with Memory (S3 + Mem0) if available
                     user_id_for_memory = "default_user"  # Will be replaced with actual user_id
                 except:
                     pass
                 
-                # Generate regular Sora script (always works as fallback) with page context + Hyperspell
+                # Generate regular Sora script (always works as fallback) with page context + Memory (S3 + Mem0)
                 llm_provider = request.llm_provider or "openai"
                 print(f"[API] Generating Sora script with page context + Hyperspell memory using {llm_provider}...")
                 sora_script = await openai_service.generate_sora_script(
@@ -2392,7 +2486,7 @@ async def import_content(
                     content = await notion_service.get_page_content(access_token, page_id)
                     if content:
                         # Upload to Hyperspell
-                        memory_id = await hyperspell_service.add_text_memory(
+                        memory_id = await memory_service.add_text_memory(
                             user_id=user_id,
                             text=content,
                             collection=request.collection or "documents"
@@ -2425,7 +2519,7 @@ async def import_content(
                     
                     if content:
                         # Upload to Hyperspell
-                        memory_id = await hyperspell_service.add_text_memory(
+                        memory_id = await memory_service.add_text_memory(
                             user_id=user_id,
                             text=content,
                             collection=request.collection or "documents"
@@ -2460,7 +2554,7 @@ async def import_content(
                         content = await jira_service.get_issue_content(access_token, cloud_id, issue_key)
                         if content:
                             # Upload to Hyperspell
-                            memory_id = await hyperspell_service.add_text_memory(
+                            memory_id = await memory_service.add_text_memory(
                                 user_id=user_id,
                                 text=content,
                                 collection=request.collection or "documents"
@@ -2962,16 +3056,273 @@ async def extend_veo3_video(request: Veo3ExtendRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/veo3/generate-with-context", response_model=Veo3GenerateWithContextResponse)
+async def generate_veo3_video_with_context(
+    request: Veo3GenerateWithContextRequest,
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Generate a Veo video using Mem0 context for script generation.
+    
+    Flow:
+    1. Get user context from Mem0
+    2. Generate video script based on context using OpenAI/Claude
+    3. Save script to Mem0 for future inspiration
+    4. Generate Veo video with the script
+    5. Handle extensions (if requested) and wait for completion
+    6. Return final video
+    
+    The script is saved to the user's memory so it can be used later for inspiration.
+    """
+    try:
+        if not veo3_service.project_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Veo 3 not configured. Set GOOGLE_CLOUD_PROJECT_ID in your .env file"
+            )
+        
+        if not openai_service:
+            raise HTTPException(
+                status_code=400,
+                detail="OpenAI service not available. Set OPENAI_API_KEY in your .env file"
+            )
+        
+        # Get user ID
+        user_id = current_user.email.lower().strip() if current_user else "anonymous_user"
+        if not current_user:
+            print(f"[API] ⚠️ Generating video without authentication (using anonymous user)")
+        
+        print(f"[API] 🎬 Generating Veo video with context for user: {user_id}")
+        print(f"[API] Topic: {request.topic}")
+        print(f"[API] Duration: {request.duration}s, Max extensions: {request.max_extensions}")
+        
+        # Step 1: Get user context from Mem0
+        user_context = ""
+        if memory_service.is_available() and current_user:
+            print(f"[API] 📋 Retrieving user context from Mem0...")
+            user_context = await get_memory_context(
+                memory_service=memory_service,
+                query=f"user background profession industry work expertise content topics brand company business documents {request.topic}",
+                user_email=user_id
+            )
+            
+            if user_context:
+                print(f"[API] ✓ Retrieved context ({len(user_context)} chars)")
+                print(f"[API] Context preview: {user_context[:300]}...")
+            else:
+                print(f"[API] ⚠️ No context found in Mem0 for user")
+        else:
+            print(f"[API] ⚠️ Mem0 not available or user not authenticated - using generic script")
+        
+        # Step 2: Generate video script based on context
+        print(f"[API] ✍️ Generating video script from context...")
+        
+        # Build prompt for script generation
+        context_section = ""
+        if user_context:
+            context_section = f"\n\nUSER CONTEXT (from Mem0):\n{user_context}\n\nUse this context to create a personalized, relevant video script that aligns with the user's brand and expertise."
+        
+        script_prompt = f"""Create a detailed video script for a {request.duration}-second marketing/educational video about: {request.topic}
+
+{context_section}
+
+Requirements:
+- Create a clear, engaging narrative suitable for Veo 3 video generation
+- Include specific visual descriptions that Veo can understand
+- Focus on professional, high-quality content
+- Make it relevant to the user's context if provided
+- Structure: opening hook, main content, closing
+- Total duration: {request.duration} seconds
+
+Return a detailed video script/prompt that can be used directly with Veo 3 for video generation."""
+        
+        # Generate script using Bedrock/Claude (preferred) or fallback to OpenAI
+        llm_provider = request.llm_provider or "bedrock"
+        generated_script = None
+        
+        # Try Bedrock/Claude first (preferred) - uses Claude Sonnet 4.5
+        if llm_provider in ["bedrock", "claude"] and bedrock_service.is_available():
+            try:
+                print(f"[API] Using AWS Bedrock (Claude Sonnet 4.5) for script generation...")
+                generated_script = await bedrock_service.generate_script(
+                    prompt=script_prompt,
+                    max_tokens=2000,
+                    temperature=0.7
+                )
+                if generated_script:
+                    print(f"[API] ✓ Script generated with Bedrock Claude Sonnet 4.5 ({len(generated_script)} chars)")
+            except Exception as bedrock_error:
+                print(f"[API] ⚠️ Bedrock generation failed, trying fallback: {bedrock_error}")
+                generated_script = None
+        
+        # Fallback to Anthropic Claude API (if available)
+        if not generated_script and llm_provider in ["claude", "bedrock"] and openai_service and openai_service.claude_available:
+            try:
+                print(f"[API] 🤖 Trying Anthropic Claude API as fallback...")
+                generated_script = await openai_service.generate_text_with_claude(
+                    prompt=script_prompt,
+                    system_message="You are an expert video script writer who creates detailed, visual video scripts for AI video generation. Create scripts that are clear, engaging, and optimized for Veo 3 video generation.",
+                    max_tokens=1000,
+                    temperature=0.7
+                )
+                if generated_script:
+                    llm_used = "Anthropic Claude API"
+                    print(f"[API] ✅ Script generated with {llm_used} ({len(generated_script)} chars)")
+            except Exception as claude_error:
+                print(f"[API] ⚠️ Claude API generation failed, falling back to OpenAI: {claude_error}")
+        
+        # Final fallback to OpenAI
+        if not generated_script and openai_service:
+            try:
+                print(f"[API] 🤖 Using OpenAI ({openai_service.model}) for script generation (fallback)...")
+                script_response = await openai_service.client.chat.completions.create(
+                    model=openai_service.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are an expert video script writer who creates detailed, visual video scripts for AI video generation. Create scripts that are clear, engaging, and optimized for Veo 3 video generation."
+                        },
+                        {
+                            "role": "user",
+                            "content": script_prompt
+                        }
+                    ],
+                    temperature=0.7,
+                    max_tokens=1000
+                )
+                generated_script = script_response.choices[0].message.content.strip()
+                llm_used = f"OpenAI ({openai_service.model})"
+                print(f"[API] ✅ Script generated with {llm_used} ({len(generated_script)} chars)")
+            except Exception as script_error:
+                print(f"[API] ⚠️ Script generation failed: {script_error}")
+                # Fallback to simple prompt
+                generated_script = f"Create a professional marketing video about {request.topic}. Show engaging visuals, clear messaging, and high-quality production values suitable for social media."
+        
+        if not generated_script:
+            # Ultimate fallback
+            generated_script = f"Create a professional marketing video about {request.topic}. Show engaging visuals, clear messaging, and high-quality production values suitable for social media."
+        
+        # Step 3: Save script to Mem0 for future inspiration
+        script_saved = False
+        if memory_service.is_available() and current_user and generated_script:
+            try:
+                print(f"[API] 💾 Saving script to Mem0 for future inspiration...")
+                script_memory_text = f"""VIDEO SCRIPT GENERATED: {request.topic}
+
+Script created for Veo 3 video generation:
+{generated_script}
+
+Topic: {request.topic}
+Duration: {request.duration} seconds
+Generated at: {datetime.now().isoformat()}
+
+This script can be used as inspiration for future video content."""
+                
+                result = await memory_service.append_to_unified_brand_context(
+                    user_id=user_id,
+                    new_content=script_memory_text,
+                    content_type="video_script"
+                )
+                
+                if result:
+                    script_saved = True
+                    print(f"[API] ✓ Script saved to Mem0 memory (resource_id: {result.get('resource_id')})")
+                else:
+                    print(f"[API] ⚠️ Failed to save script to Mem0")
+            except Exception as save_error:
+                print(f"[API] ⚠️ Error saving script to Mem0: {save_error}")
+        
+        # Step 4: Generate Veo video with the script
+        print(f"[API] 🎥 Generating Veo video with script...")
+        
+        # Ensure duration is valid (4, 6, or 8 seconds for initial generation)
+        valid_durations = [4, 6, 8]
+        if request.duration not in valid_durations:
+            duration = min(valid_durations, key=lambda x: abs(x - request.duration))
+            print(f"[API] ⚠️ Adjusted duration from {request.duration}s to {duration}s (Veo 3 supports 4, 6, or 8s initially)")
+        else:
+            duration = request.duration
+        
+        # Generate video
+        video_result = await veo3_service.generate_video(
+            prompt=generated_script,
+            duration=duration,
+            resolution=request.resolution
+        )
+        
+        job_id = video_result.get("job_id")
+        print(f"[API] ✓ Video generation started: {job_id[:50]}...")
+        
+        # Step 5: Handle extensions and wait for completion if requested
+        video_url = None
+        extensions_completed = 0
+        final_duration = duration
+        
+        if request.wait_for_completion:
+            print(f"[API] ⏳ Waiting for video to complete...")
+            try:
+                if request.max_extensions > 0:
+                    print(f"[API] Will wait for {request.max_extensions} extensions to complete...")
+                
+                final_result = await wait_for_video_completion_with_extensions(
+                    veo3_service=veo3_service,
+                    job_id=job_id,
+                    max_extensions=request.max_extensions,
+                    check_interval=10,
+                    max_wait_time=1800,  # 30 minutes
+                    initial_duration=duration
+                )
+                
+                video_url = final_result.get("video_url")
+                extensions_completed = final_result.get("extensions_completed", 0)
+                final_duration = final_result.get("final_duration", duration)
+                final_job_id = final_result.get("job_id", job_id)  # Get final job_id (may have changed with extensions)
+                
+                print(f"[API] ✅ Video generation complete!")
+                print(f"[API] Final duration: {final_duration}s ({extensions_completed} extensions)")
+                
+                # Step 6: Videos are automatically stored in GCS (configured via VEO3_STORAGE_URI)
+                # The video_url returned from Veo will be a GCS URI or download endpoint
+                if video_url:
+                    print(f"[API] ✅ Video stored in GCS (via VEO3_STORAGE_URI)")
+                
+            except Exception as wait_error:
+                print(f"[API] ⚠️ Error waiting for completion: {wait_error}")
+                # Return job_id so user can poll status manually
+                video_url = None
+        
+        return Veo3GenerateWithContextResponse(
+            job_id=job_id,
+            status="completed" if video_url else "in_progress",
+            video_url=video_url,
+            progress=100 if video_url else 0,
+            model=video_result.get("model", "veo-3"),
+            script=generated_script,
+            script_saved=script_saved,
+            extensions_completed=extensions_completed,
+            final_duration=final_duration
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] ERROR Veo generation with context failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/image/generate", response_model=ImageGenerateResponse)
 async def generate_image(request: ImageGenerateRequest):
     """
-    Generate an image using DALL-E 3 or other image generation models
+    Generate an image using Google Imagen via Vertex AI (nanobanana/gemini-3-pro-image)
     """
     try:
-        if not image_generation_service.openai_api_key and request.model.startswith("dall-e"):
+        # DALL-E support has been removed - only Imagen via Vertex AI is supported
+        if request.model.startswith("dall-e"):
             raise HTTPException(
                 status_code=400,
-                detail="OpenAI API key not configured for image generation. Set OPENAI_API_KEY in your .env file"
+                detail="DALL-E is no longer supported. Please use 'nanobanana' or 'gemini-3-pro-image' model."
             )
         
         result = await image_generation_service.generate_image(
@@ -2983,6 +3334,10 @@ async def generate_image(request: ImageGenerateRequest):
             n=request.n,
             aspect_ratio=request.aspect_ratio
         )
+        
+        print(f"[API] Image generation result keys: {list(result.keys())}")
+        print(f"[API] Image URL present: {bool(result.get('image_url'))}")
+        print(f"[API] Image base64 present: {bool(result.get('image_base64'))}")
         
         return ImageGenerateResponse(**result)
     except HTTPException:
@@ -3021,24 +3376,24 @@ async def create_marketing_post(
         
         # First post check disabled - removed to prevent overwriting user-generated scripts
         # is_first = False
-        # if hyperspell_service.is_available():
-        #     is_first = await is_first_post(hyperspell_service, user_id)
+        # if memory_service.is_available():
+        #     is_first = await is_first_post(memory_service, user_id)
         is_first = False  # Always set to False to disable first post logic
         
-        # Get user context from Hyperspell (company info, brand context)
+        # Get user context from Memory (company info, brand context)
         user_context = ""
         post_performance_context = ""
         
-        if hyperspell_service.is_available():
-            user_context = await get_hyperspell_context(
-                hyperspell_service=hyperspell_service,
+        if memory_service.is_available():
+            user_context = await get_memory_context(
+                memory_service=memory_service,
                 query=f"company information business brand products services {request.brand_context or ''}",
                 user_email=user_id if current_user else None
             )
             
             # Get post performance context (previous posts and their performance)
             post_performance_context = await get_post_performance_context(
-                hyperspell_service=hyperspell_service,
+                memory_service=memory_service,
                 user_id=user_id
             )
         
@@ -3057,16 +3412,7 @@ async def create_marketing_post(
                 if user_context:
                     context_section = f"\n\nUSER CONTEXT (from uploaded documents):\n{user_context}\n\nUse this context to make the image more personalized and relevant."
                 
-                prompt_generation = await openai_service.client.chat.completions.create(
-                    model=openai_service.model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are an expert at creating detailed, visual image prompts for marketing posts. Create prompts that are photorealistic, engaging, and suitable for social media."
-                        },
-                        {
-                            "role": "user",
-                            "content": f"""Create a detailed, ultra high-quality, photorealistic image prompt for a marketing post about: {request.topic}
+                image_prompt_prompt = f"""Create a detailed, ultra high-quality, photorealistic image prompt for a marketing post about: {request.topic}
 
 {f"Brand context: {request.brand_context}" if request.brand_context else ""}
 {context_section}
@@ -3085,51 +3431,135 @@ Requirements:
 - Personalized based on user context if provided
 
 Return ONLY the image prompt text, no additional text."""
-                        }
-                    ],
-                    temperature=0.7,
-                    max_tokens=200
-                )
-                image_prompt = prompt_generation.choices[0].message.content.strip()
-                print(f"[API] ✓ Generated image prompt: {image_prompt[:100]}...")
+                
+                # Try Claude first if available, fallback to OpenAI
+                image_prompt_text = None
+                if openai_service.claude_available:
+                    try:
+                        image_prompt_text = await openai_service.generate_text_with_claude(
+                            prompt=image_prompt_prompt,
+                            system_message="You are an expert at creating detailed, visual image prompts for marketing posts. Create prompts that are photorealistic, engaging, and suitable for social media.",
+                            max_tokens=200,
+                            temperature=0.7
+                        )
+                        if image_prompt_text:
+                            print(f"[API] ✓ Generated image prompt with Claude: {image_prompt_text[:100]}...")
+                    except Exception as claude_error:
+                        print(f"[API] ⚠️ Claude generation failed, falling back to OpenAI: {claude_error}")
+                
+                # Fallback to OpenAI if Claude not available or failed
+                if not image_prompt_text:
+                    prompt_generation = await openai_service.client.chat.completions.create(
+                        model=openai_service.model,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "You are an expert at creating detailed, visual image prompts for marketing posts. Create prompts that are photorealistic, engaging, and suitable for social media."
+                            },
+                            {
+                                "role": "user",
+                                "content": image_prompt_prompt
+                            }
+                        ],
+                        temperature=0.7,
+                        max_tokens=200
+                    )
+                    image_prompt_text = prompt_generation.choices[0].message.content.strip()
+                    print(f"[API] ✓ Generated image prompt with OpenAI: {image_prompt_text[:100]}...")
+                
+                image_prompt = image_prompt_text
             except Exception as e:
                 print(f"[API] ⚠️ Failed to generate image prompt, using topic directly: {e}")
                 image_prompt = f"Ultra high quality, photorealistic, professional photography, 8K resolution, sharp focus, crisp details, perfect text rendering, readable text, high contrast, vibrant colors, professional lighting, studio quality, marketing quality, social media ready: Professional marketing image about {request.topic}"
         elif not image_prompt:
             image_prompt = f"Professional marketing image about {request.topic}, high quality, social media style"
         
-        # Step 2: Generate image using nanobanana
-        print(f"[API] 🎨 Generating image with nanobanana...")
-        if not image_generation_service.project_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Image generation not configured. Set GOOGLE_CLOUD_PROJECT_ID in your .env file (same as Veo 3)"
-            )
+        # Step 2: Use existing static images instead of generating new ones
+        # Load static posts JSON to get available images
+        import json
+        static_posts_path = os.path.join(BASE_DIR, "..", "frontend", "public", "static-posts", "posts.json")
+        image_result = None
         
-        # Determine size based on aspect ratio
-        size_map = {
-            "1:1": "1024x1024",
-            "16:9": "1792x1024",
-            "9:16": "1024x1792",
-            "4:3": "1024x768",
-            "3:4": "768x1024"
-        }
-        size = size_map.get(request.aspect_ratio or "1:1", "1024x1024")
+        try:
+            with open(static_posts_path, 'r', encoding='utf-8') as f:
+                static_posts = json.load(f)
+            
+            # Find a matching post by topic (fuzzy match) or select a random one
+            matching_post = None
+            topic_lower = request.topic.lower()
+            
+            for post in static_posts:
+                if topic_lower in post.get("topic", "").lower() or post.get("topic", "").lower() in topic_lower:
+                    matching_post = post
+                    break
+            
+            # If no match, select a random post from the static images
+            if not matching_post:
+                import random
+                matching_post = random.choice(static_posts)
+                print(f"[API] No exact topic match, using random static image: {matching_post.get('topic')}")
+            else:
+                print(f"[API] ✓ Found matching static image for topic: {matching_post.get('topic')}")
+            
+            # Get the image path from the static post
+            # Ensure consistent path format: "/static-posts/images/marketing-post-X.png"
+            image_path = matching_post.get("image", "")
+            if image_path:
+                # Normalize to consistent format for both localhost and production
+                if image_path.startswith("images/"):
+                    # Format: "images/marketing-post-1.png" -> "/static-posts/images/marketing-post-1.png"
+                    static_image_url = f"/static-posts/{image_path}"
+                elif image_path.startswith("/static-posts/"):
+                    # Already in correct format
+                    static_image_url = image_path
+                elif image_path.startswith("/"):
+                    # Other absolute paths - keep as is
+                    static_image_url = image_path
+                else:
+                    # Just filename - assume it's in images folder
+                    static_image_url = f"/static-posts/images/{image_path}"
+                
+                # Read the static image file to get base64 for response
+                static_image_file = os.path.join(BASE_DIR, "..", "frontend", "public", "static-posts", image_path)
+                if os.path.exists(static_image_file):
+                    with open(static_image_file, 'rb') as f:
+                        import base64
+                        image_data = f.read()
+                        image_base64 = base64.b64encode(image_data).decode('utf-8')
+                    
+                    image_result = {
+                        "image_base64": image_base64,
+                        "image_url": static_image_url,
+                        "revised_prompt": image_prompt,
+                        "model": "static",
+                        "size": "1024x1024",
+                        "quality": "high",
+                        "aspect_ratio": request.aspect_ratio or "1:1"
+                    }
+                    print(f"[API] ✓ Using static image: {static_image_url}")
+                else:
+                    print(f"[API] ⚠️ Static image file not found: {static_image_file}")
+        except Exception as e:
+            print(f"[API] ⚠️ Error loading static posts: {e}")
+            import traceback
+            traceback.print_exc()
         
-        image_result = await image_generation_service.generate_image(
-            prompt=image_prompt,
-            model="nanobanana",
-            size=size,
-            quality="high",
-            aspect_ratio=request.aspect_ratio or "1:1"
-        )
+        # Fallback: if static images couldn't be loaded, use a default
+        if not image_result:
+            print(f"[API] ⚠️ Could not load static images, using default")
+            # Use the first static image as fallback
+            default_image_url = "/static-posts/images/marketing-post-1.png"
+            image_result = {
+                "image_base64": None,  # Will be loaded by frontend
+                "image_url": default_image_url,
+                "revised_prompt": image_prompt,
+                "model": "static",
+                "size": "1024x1024",
+                "quality": "high",
+                "aspect_ratio": request.aspect_ratio or "1:1"
+            }
         
-        if not image_result.get("image_url") and not image_result.get("image_base64"):
-            raise HTTPException(status_code=500, detail="Failed to generate image")
-        
-        print(f"[API] ✓ Image generated successfully")
-        
-        # Step 3: Generate marketing caption
+        # Step 4: Generate marketing caption
         print(f"[API] ✍️ Generating marketing caption...")
         caption = ""
         hashtags = []
@@ -3172,23 +3602,40 @@ Tone: {request.caption_style or "engaging"}
 
 Return the caption text only."""
                 
-                caption_response = await openai_service.client.chat.completions.create(
-                    model=openai_service.model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are an expert social media marketer who creates compelling, engaging captions that drive engagement and conversions."
-                        },
-                        {
-                            "role": "user",
-                            "content": caption_prompt
-                        }
-                    ],
-                    temperature=0.8,
-                    max_tokens=300
-                )
+                # Try Claude first if available, fallback to OpenAI
+                generated_text = None
+                if openai_service.claude_available:
+                    try:
+                        generated_text = await openai_service.generate_text_with_claude(
+                            prompt=caption_prompt,
+                            system_message="You are an expert social media marketer who creates compelling, engaging captions that drive engagement and conversions.",
+                            max_tokens=300,
+                            temperature=0.8
+                        )
+                        if generated_text:
+                            print(f"[API] ✓ Generated caption with Claude ({len(generated_text)} chars)")
+                    except Exception as claude_error:
+                        print(f"[API] ⚠️ Claude generation failed, falling back to OpenAI: {claude_error}")
                 
-                generated_text = caption_response.choices[0].message.content.strip()
+                # Fallback to OpenAI if Claude not available or failed
+                if not generated_text:
+                    caption_response = await openai_service.client.chat.completions.create(
+                        model=openai_service.model,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "You are an expert social media marketer who creates compelling, engaging captions that drive engagement and conversions."
+                            },
+                            {
+                                "role": "user",
+                                "content": caption_prompt
+                            }
+                        ],
+                        temperature=0.8,
+                        max_tokens=300
+                    )
+                    generated_text = caption_response.choices[0].message.content.strip()
+                    print(f"[API] ✓ Generated caption with OpenAI ({len(generated_text)} chars)")
                 
                 # Extract hashtags if included
                 if request.include_hashtags:
@@ -3233,14 +3680,15 @@ Return the caption text only."""
             hashtag_string = ' '.join([f"#{tag}" for tag in hashtags])
             full_caption = f"{caption}\n\n{hashtag_string}"
         
-        # Step 4: Save post to Hyperspell memory (for all users, including anonymous)
-        if hyperspell_service.is_available():
+        # Step 5: Save post to Hyperspell memory (for all users, including anonymous)
+        if memory_service.is_available():
             print(f"[API] 💾 Saving post to Hyperspell memory (User: {user_id})...")
             post_data = {
                 "topic": request.topic,
                 "caption": caption,
                 "hashtags": hashtags,
                 "image_prompt": image_prompt,
+                "image_url": image_result.get("image_url"),  # Store file URL (not base64)
                 "created_at": datetime.now().isoformat(),
                 "post_id": None,  # Will be updated if posted
                 "post_url": None,  # Will be updated if posted
@@ -3251,7 +3699,7 @@ Return the caption text only."""
             }
             
             resource_id = await save_post_to_memory(
-                hyperspell_service=hyperspell_service,
+                memory_service=memory_service,
                 user_id=user_id,
                 post_data=post_data,
                 collection="user_posts"
@@ -3264,7 +3712,7 @@ Return the caption text only."""
         else:
             print(f"[API] ⚠️ Hyperspell not available, post not saved to memory")
         
-        # Step 5: Optionally post to Instagram (using browser automation)
+        # Step 6: Optionally post to Instagram (using browser automation)
         post_id = None
         post_url = None
         post_error = None
@@ -3313,24 +3761,40 @@ Return the caption text only."""
                 print(f"[API] ❌ Instagram posting error: {e}")
         
         # Update post in memory if it was posted
-        if post_id and hyperspell_service.is_available():
+        if post_id and memory_service.is_available():
             # Note: In a real implementation, you'd update the existing memory
             # For now, we save it initially and could update later when performance data comes in
             pass
         
-        return MarketingPostResponse(
-            success=True,
-            image_url=image_result.get("image_url"),
-            image_base64=image_result.get("image_base64"),
-            image_prompt=image_prompt,
-            caption=caption,
-            hashtags=hashtags if request.include_hashtags else None,
-            full_caption=full_caption,
-            post_id=post_id,
-            post_url=post_url,
-            error=post_error,
-            is_first_post=is_first
-        )
+        # Get full URL for image (prepend API base URL if relative)
+        image_url = image_result.get("image_url")
+        if image_url and not image_url.startswith("http"):
+            # For local files, return the path that will be served by FastAPI
+            # Frontend should prepend API_URL
+            pass  # Keep as relative path, frontend will handle
+        
+        # Also include base64 in response for immediate display (optional)
+        image_base64 = image_result.get("image_base64")
+        
+        response_data = {
+            "success": True,
+            "image_url": image_url,
+            "image_base64": image_base64,  # Include for immediate display
+            "image_prompt": image_prompt,
+            "caption": caption,
+            "hashtags": hashtags if request.include_hashtags else None,
+            "full_caption": full_caption,
+            "post_id": post_id,
+            "post_url": post_url,
+            "error": post_error,
+            "is_first_post": is_first
+        }
+        
+        print(f"[API] Response data - image_url present: {bool(response_data['image_url'])}")
+        print(f"[API] Response data - image_base64 present: {bool(response_data['image_base64'])}")
+        print(f"[API] Response data keys: {list(response_data.keys())}")
+        
+        return MarketingPostResponse(**response_data)
         
     except HTTPException:
         raise
@@ -3339,6 +3803,549 @@ Return the caption text only."""
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/aigis-marketing/generate", response_model=AigisMarketingResponse)
+async def generate_aigis_marketing_content(
+    request: AigisMarketingRequest,
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Generate content for Aigis Marketing in 5 minutes (instead of 2-3 hours).
+    
+    Process:
+    1. Brainstorm topics
+    2. Outline key points
+    3. Write draft
+    4. Review and edit
+    5. Prepare for posting (image, excerpt, tags)
+    """
+    try:
+        user_id = current_user.email if current_user else "anonymous_user"
+        print(f"[API] 📝 Generating Aigis Marketing content for topic: {request.topic} (Style: {request.style}, User: {user_id})")
+        
+        if not openai_service:
+            raise HTTPException(
+                status_code=400,
+                detail="OpenAI API key is required. Please set OPENAI_API_KEY in your .env file."
+            )
+        
+        # Get user context if available
+        user_context = ""
+        if memory_service.is_available():
+            user_context = await get_memory_context(
+                memory_service=memory_service,
+                query=f"user content style preferences brand context {request.topic}",
+                user_email=user_id if current_user else None
+            )
+        
+        # Build style-specific instructions
+        style_instructions = {
+            "thought-leadership": """Create educational, evidence-based content for health tech and healthcare professionals.
+            Focus on teaching and providing education on evidence generation for value creation.
+            Tone: Professional, authoritative, educational, easy to understand (ELI5 style when appropriate).
+            Structure: Framework-based, structured, concise with clear call to action.""",
+            "company-content": """Create brand-focused content for company marketing.
+            Tone: Professional, engaging, aligned with company values.
+            Structure: Clear value proposition, benefits, call to action.""",
+            "personal-blog": """Create personal insights and experiences content.
+            Tone: Conversational, authentic, relatable.
+            Structure: Story-driven, personal anecdotes, lessons learned."""
+        }
+        
+        style_guide = style_instructions.get(request.style, style_instructions["thought-leadership"])
+        
+        # Step 1-3: Generate outline and draft in one call
+        content_prompt = f"""You are an expert content creator helping create high-quality {request.style} content in 5 minutes.
+
+TOPIC: {request.topic}
+
+STYLE GUIDE:
+{style_guide}
+
+USER CONTEXT:
+{user_context if user_context else "No specific user context available."}
+
+TASK: Create a complete article following these steps:
+
+1. OUTLINE: Provide 5-7 key points/takeaways as a bulleted list
+2. DRAFT: Write a complete, well-structured article (800-1200 words) that:
+   - Follows the outline
+   - Is engaging and easy to understand
+   - Includes a clear call to action
+   - Uses the appropriate tone for {request.style}
+   - Is suitable for LinkedIn and blog posting
+
+3. IMAGE PROMPT: Suggest an appropriate image description for this article
+4. EXCERPT: Create a 2-3 sentence excerpt for blog preview (150-200 characters)
+5. TAGS: Suggest 5-7 relevant tags/hashtags
+
+Return your response in this JSON format:
+{{
+  "outline": ["point 1", "point 2", ...],
+  "draft": "full article text here...",
+  "imagePrompt": "description of image to use",
+  "excerpt": "brief excerpt for blog",
+  "tags": ["tag1", "tag2", ...]
+}}"""
+        
+        print(f"[API] 🤖 Generating content with OpenAI...")
+        response = await openai_service.client.chat.completions.create(
+            model=openai_service.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert content creator specializing in creating high-quality, engaging content for LinkedIn and blogs. You help professionals create thought leadership content efficiently."
+                },
+                {
+                    "role": "user",
+                    "content": content_prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=3000,
+            response_format={"type": "json_object"}
+        )
+        
+        content_data = json.loads(response.choices[0].message.content)
+        
+        print(f"[API] ✓ Content generated successfully")
+        
+        return AigisMarketingResponse(
+            success=True,
+            outline=content_data.get("outline", []),
+            draft=content_data.get("draft", ""),
+            imagePrompt=content_data.get("imagePrompt", ""),
+            excerpt=content_data.get("excerpt", ""),
+            tags=content_data.get("tags", []),
+            content=content_data.get("draft", "")
+        )
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[API] ❌ Error generating Aigis Marketing content: {e}")
+        return AigisMarketingResponse(
+            success=False,
+            error=f"Failed to generate content: {str(e)}"
+        )
+
+
+@app.post("/api/aigis-marketing/brainstorm")
+async def brainstorm_topics(
+    request: AigisMarketingRequest,
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Step 1: Brainstorm topic ideas based on the initial topic.
+    """
+    try:
+        user_id = current_user.email if current_user else "anonymous_user"
+        print(f"[API] 💡 Brainstorming topics for: {request.topic}")
+        
+        if not openai_service:
+            raise HTTPException(
+                status_code=400,
+                detail="OpenAI API key is required."
+            )
+        
+        # Get user context
+        user_context = ""
+        if memory_service.is_available():
+            user_context = await get_memory_context(
+                memory_service=memory_service,
+                query=f"user content style preferences brand context {request.topic}",
+                user_email=user_id if current_user else None
+            )
+        
+        prompt = f"""Based on this topic: "{request.topic}"
+
+Generate 5-7 variations or related topic ideas that would make great content. Each should be:
+- Specific and actionable
+- Engaging for the target audience
+- Suitable for LinkedIn and blog posts
+
+Return a JSON object with a "topics" array of topic strings.
+
+User context: {user_context if user_context else "No specific context available."}"""
+        
+        response = await openai_service.client.chat.completions.create(
+            model=openai_service.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert content strategist who helps create engaging topic ideas for professional content."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.8,
+            max_tokens=500,
+            response_format={"type": "json_object"}
+        )
+        
+        data = json.loads(response.choices[0].message.content)
+        topics = data.get("topics", [])
+        
+        return {
+            "success": True,
+            "topics": topics
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[API] ❌ Error brainstorming: {e}")
+        return {
+            "success": False,
+            "error": f"Failed to brainstorm topics: {str(e)}"
+        }
+
+
+@app.post("/api/aigis-marketing/outline")
+async def generate_outline(
+    request: AigisMarketingRequest,
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Step 2: Generate outline with key points for the selected topic.
+    """
+    try:
+        user_id = current_user.email if current_user else "anonymous_user"
+        print(f"[API] 📋 Generating outline for: {request.topic}")
+        
+        if not openai_service:
+            raise HTTPException(
+                status_code=400,
+                detail="OpenAI API key is required."
+            )
+        
+        # Get user context
+        user_context = ""
+        if memory_service.is_available():
+            user_context = await get_memory_context(
+                memory_service=memory_service,
+                query=f"user content style preferences brand context {request.topic}",
+                user_email=user_id if current_user else None
+            )
+        
+        style_instructions = {
+            "thought-leadership": "Professional, authoritative, educational, easy to understand.",
+            "company-content": "Professional, engaging, aligned with company values.",
+            "personal-blog": "Conversational, authentic, relatable."
+        }
+        style_guide = style_instructions.get(request.style, style_instructions["thought-leadership"])
+        
+        prompt = f"""Create a detailed outline for an article on: "{request.topic}"
+
+Style: {style_guide}
+
+Generate 5-7 key points/takeaways that will form the structure of the article. Each point should be:
+- Clear and specific
+- Actionable or insightful
+- Flow logically from one to the next
+
+Return a JSON object with an "outline" array of point strings.
+
+User context: {user_context if user_context else "No specific context available."}"""
+        
+        response = await openai_service.client.chat.completions.create(
+            model=openai_service.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert content creator who creates well-structured outlines for professional articles."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=800,
+            response_format={"type": "json_object"}
+        )
+        
+        data = json.loads(response.choices[0].message.content)
+        outline = data.get("outline", [])
+        
+        return {
+            "success": True,
+            "outline": outline
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[API] ❌ Error generating outline: {e}")
+        return {
+            "success": False,
+            "error": f"Failed to generate outline: {str(e)}"
+        }
+
+
+@app.post("/api/aigis-marketing/draft")
+async def generate_draft(
+    request: dict,
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Step 3: Generate full draft article based on the outline.
+    """
+    try:
+        topic = request.get("topic", "")
+        outline = request.get("outline", [])
+        style = request.get("style", "thought-leadership")
+        
+        user_id = current_user.email if current_user else "anonymous_user"
+        print(f"[API] ✍️ Generating draft for: {topic}")
+        
+        if not openai_service:
+            raise HTTPException(
+                status_code=400,
+                detail="OpenAI API key is required."
+            )
+        
+        # Get user context
+        user_context = ""
+        if memory_service.is_available():
+            user_context = await get_memory_context(
+                memory_service=memory_service,
+                query=f"user content style preferences brand context {topic}",
+                user_email=user_id if current_user else None
+            )
+        
+        style_instructions = {
+            "thought-leadership": """Professional, authoritative, educational, easy to understand (ELI5 style when appropriate).
+            Structure: Framework-based, structured, concise with clear call to action.""",
+            "company-content": """Professional, engaging, aligned with company values.
+            Structure: Clear value proposition, benefits, call to action.""",
+            "personal-blog": """Conversational, authentic, relatable.
+            Structure: Story-driven, personal anecdotes, lessons learned."""
+        }
+        style_guide = style_instructions.get(style, style_instructions["thought-leadership"])
+        
+        outline_text = "\n".join([f"{i+1}. {point}" for i, point in enumerate(outline)])
+        
+        prompt = f"""Write a complete, well-structured article (800-1200 words) based on this outline:
+
+TOPIC: {topic}
+
+OUTLINE:
+{outline_text}
+
+STYLE GUIDE:
+{style_guide}
+
+Requirements:
+- Follow the outline structure
+- Be engaging and easy to understand
+- Include a clear call to action
+- Use the appropriate tone for {style}
+- Suitable for LinkedIn and blog posting
+- Also generate:
+  * An imagePrompt: description of an appropriate image
+  * An excerpt: 2-3 sentence excerpt for blog preview (150-200 characters)
+  * Tags: 5-7 relevant tags/hashtags
+
+Return a JSON object with:
+- "draft": the full article text
+- "imagePrompt": image description
+- "excerpt": blog preview excerpt
+- "tags": array of tags
+
+User context: {user_context if user_context else "No specific context available."}"""
+        
+        response = await openai_service.client.chat.completions.create(
+            model=openai_service.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert content creator specializing in creating high-quality, engaging content for LinkedIn and blogs."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=3000,
+            response_format={"type": "json_object"}
+        )
+        
+        data = json.loads(response.choices[0].message.content)
+        
+        return {
+            "success": True,
+            "draft": data.get("draft", ""),
+            "imagePrompt": data.get("imagePrompt", ""),
+            "excerpt": data.get("excerpt", ""),
+            "tags": data.get("tags", [])
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[API] ❌ Error generating draft: {e}")
+        return {
+            "success": False,
+            "error": f"Failed to generate draft: {str(e)}"
+        }
+
+
+@app.post("/api/aigis-marketing/suggestions", response_model=AigisMarketingSuggestionsResponse)
+async def get_aigis_marketing_suggestions(
+    request: AigisMarketingSuggestionsRequest,
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Generate contextual topic suggestions and recommendations based on user's Hyperspell context.
+    Analyzes user's context (e.g., medical youtube channel, student, marketer) and suggests relevant content types.
+    """
+    try:
+        user_id = current_user.email if current_user else "anonymous_user"
+        print(f"[API] 💡 Generating contextual suggestions for user: {user_id}")
+        
+        if not openai_service:
+            raise HTTPException(
+                status_code=400,
+                detail="OpenAI API key is required. Please set OPENAI_API_KEY in your .env file."
+            )
+        
+        # Get comprehensive user context from Memory (S3 + Mem0)
+        user_context = ""
+        if memory_service.is_available() and current_user:
+            user_context = await get_memory_context(
+                memory_service=memory_service,
+                query=f"user background profession industry work expertise content topics brand company business documents uploaded",
+                user_email=user_id
+            )
+            print(f"[API] 📋 Retrieved user context length: {len(user_context)} characters")
+            if user_context:
+                print(f"[API] 📋 User context preview: {user_context[:500]}...")
+            else:
+                print(f"[API] ⚠️ No user context retrieved from Memory - will use generic suggestions")
+        elif not current_user:
+            print(f"[API] ⚠️ No authenticated user - using generic suggestions")
+        
+        # Build the prompt based on whether we have context
+        if user_context and user_context.strip():
+            suggestions_prompt = f"""Analyze this user context step by step:
+
+USER CONTEXT:
+{user_context}
+
+STEP 1: Extract and list ONLY the topics/industries/professions explicitly mentioned in the context above. List them here:
+- [List each topic you find]
+
+STEP 2: Generate 5-7 content suggestions that match ONLY the topics from STEP 1.
+
+CRITICAL: 
+- If healthcare/medical/health/epidemiology/healthtech is NOT in your STEP 1 list → DO NOT include ANY healthcare suggestions
+- Only suggest content for topics actually found in STEP 1
+- DO NOT add topics not in STEP 1
+- Be strict: if it's not explicitly mentioned, don't include it
+
+Welcome message: Mention which specific topics from the context informed these suggestions.
+
+Return JSON:
+{{
+  "welcomeMessage": "Brief explanation mentioning specific topics from context",
+  "suggestions": ["Suggestion 1", "Suggestion 2", ...]
+}}"""
+        else:
+            # No context available - provide generic suggestions
+            suggestions_prompt = """You are an expert content strategist. The user has no specific context available yet.
+
+Generate 5-7 general, versatile content creation suggestions that work for most professionals:
+- Convert expertise into educational content
+- Share insights and lessons learned
+- Create how-to guides based on experience
+- Write thought leadership pieces
+- Document processes and frameworks
+- Share case studies or examples
+- Create informative articles
+
+Also provide a brief welcome message explaining they can upload documents or provide more context for personalized suggestions.
+
+Return your response in this JSON format:
+{
+  "welcomeMessage": "Welcome message mentioning they can provide more context",
+  "suggestions": ["Suggestion 1", "Suggestion 2", "Suggestion 3", "Suggestion 4", "Suggestion 5"]
+}"""
+        
+        print(f"[API] 🤖 Analyzing user context and generating personalized suggestions...")
+        response = await openai_service.client.chat.completions.create(
+            model=openai_service.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a content strategist who provides suggestions based ONLY on what's explicitly stated in the user's context. You do not add topics not mentioned. You do not assume or infer. You strictly match suggestions to what's in the provided context."
+                },
+                {
+                    "role": "user",
+                    "content": suggestions_prompt
+                }
+            ],
+            temperature=0.8,
+            max_tokens=800,
+            response_format={"type": "json_object"}
+        )
+        
+        suggestions_data = json.loads(response.choices[0].message.content)
+        suggestions = suggestions_data.get("suggestions", [])
+        welcome_message = suggestions_data.get("welcomeMessage", "Here are some content ideas tailored for you:")
+        
+        print(f"[API] ✓ Generated {len(suggestions)} personalized suggestions")
+        
+        return AigisMarketingSuggestionsResponse(
+            success=True,
+            suggestions=suggestions,
+            welcomeMessage=welcome_message
+        )
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[API] ❌ Error generating suggestions: {e}")
+        return AigisMarketingSuggestionsResponse(
+            success=False,
+            error=f"Failed to generate suggestions: {str(e)}"
+        )
+
+
+@app.post("/api/aigis-marketing/post", response_model=dict)
+async def post_aigis_marketing_content(
+    request: AigisMarketingPostRequest,
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Post Aigis Marketing content to specified platforms (LinkedIn, blog, etc.)
+    """
+    try:
+        user_id = current_user.email if current_user else "anonymous_user"
+        print(f"[API] 📤 Posting Aigis Marketing content to: {', '.join(request.platforms)}")
+        
+        # For now, return success (actual posting would require platform APIs)
+        # In production, this would:
+        # 1. Post to LinkedIn via LinkedIn API
+        # 2. Post to WordPress/Substack via their APIs
+        # 3. Generate and attach image if needed
+        
+        return {
+            "success": True,
+            "message": f"Content prepared for posting to {', '.join(request.platforms)}",
+            "platforms": request.platforms,
+            "note": "Actual posting requires platform API integration. Content is ready for manual posting."
+        }
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[API] ❌ Error posting Aigis Marketing content: {e}")
+        return {
+            "success": False,
+            "error": f"Failed to post content: {str(e)}"
+        }
 
 
 @app.post("/api/marketing-post/update-performance")
@@ -3360,7 +4367,7 @@ async def update_post_performance(
         
         user_id = current_user.email
         
-        if not hyperspell_service.is_available():
+        if not memory_service.is_available():
             return {"success": False, "message": "Hyperspell not available"}
         
         # Calculate engagement rate if we have the data
@@ -3370,7 +4377,7 @@ async def update_post_performance(
             engagement_rate = total_engagement / views
         
         # Search for the post in Hyperspell memory
-        search_result = await hyperspell_service.query_memories(
+        search_result = await memory_service.query_memories(
             user_id=user_id,
             query=f"post_id {post_id} marketing post",
             max_results=5
@@ -3406,7 +4413,7 @@ Performance Data:
 {json.dumps(performance_data, indent=2)}
 """
         
-        result = await hyperspell_service.add_text_memory(
+        result = await memory_service.add_text_memory(
             user_id=user_id,
             text=performance_memory,
             collection="post_performance"
@@ -3453,7 +4460,7 @@ async def scrape_and_score_linkedin_posts(
         
         # Save to Hyperspell if available
         saved_count = 0
-        if hyperspell_service.is_available():
+        if memory_service.is_available():
             user_id = current_user.email if current_user else "anonymous_user"
             
             for post in posts:
@@ -3485,7 +4492,7 @@ Full Data:
 {json.dumps(post, indent=2)}
 """
                     
-                    result = await hyperspell_service.add_text_memory(
+                    result = await memory_service.add_text_memory(
                         user_id=user_id,
                         text=post_memory,
                         collection="linkedin_scored_posts"
@@ -3556,15 +4563,15 @@ async def get_marketing_post_suggestions(
                 user_context_used=None
             )
         
-        # Get user context from Hyperspell memories (documents are stored in memories)
+        # Get user context from Memory (documents are stored in S3 + Mem0)
         # Use email as user_id - this MUST match what was used when saving memories
         user_id = current_user.email.lower().strip()  # Normalize email (lowercase, no whitespace)
-        print(f"[API] Using user email for Hyperspell: {user_id}")
+        print(f"[API] Using user email for Memory: {user_id}")
         print(f"[API] User details - username: {current_user.username}, email: {current_user.email}, id: {current_user.id}")
         user_context = ""
         post_performance_context = ""
         
-        # Always try to get ALL context from Hyperspell memories if user is logged in
+        # Always try to get ALL context from Memory (S3 + Mem0) if user is logged in
         # This includes documents, competitors, previously generated posts, user context, etc.
         # Run queries in parallel to speed up response time
         user_context = ""
@@ -3572,28 +4579,28 @@ async def get_marketing_post_suggestions(
         linkedin_posts_context = ""
         high_scoring_posts = []
         
-        if hyperspell_service.is_available() and current_user:
-            print(f"[API] Getting ALL Hyperspell memories for user: {user_id}")
-            print(f"[API] CRITICAL: Using normalized email '{user_id}' to query Hyperspell")
+        if memory_service.is_available() and current_user:
+            print(f"[API] Getting ALL memories from Mem0 for user: {user_id}")
+            print(f"[API] Using normalized email '{user_id}' to query Memory (S3 + Mem0)")
             print(f"[API] Make sure memories were saved with the same email format!")
             
-            # Run all Hyperspell queries in parallel for faster response
+            # Run all Memory queries in parallel for faster response
             import asyncio
             tasks = []
             
             # Task 1: Get all memories - use normalized user_id
-            tasks.append(hyperspell_service.get_all_memories_context(user_id))
+            tasks.append(memory_service.get_all_memories_context(user_id))
             
             # Task 2: Get post performance context - use normalized user_id
             tasks.append(get_post_performance_context(
-                hyperspell_service=hyperspell_service,
+                memory_service=memory_service,
                 user_id=user_id
             ))
             
             # Task 3: Get LinkedIn posts - use normalized user_id
             async def get_linkedin_posts():
                 try:
-                    return await hyperspell_service.query_memories(
+                    return await memory_service.query_memories(
                         user_id=user_id,
                         query="LinkedIn Scored Post high score engagement metrics",
                         max_results=10
@@ -3710,7 +4717,7 @@ Return the suggestions in this JSON format:
   "suggestions": [
     {{
       "topic": "Topic suggestion here",
-      "context": "Why this is relevant based on the user's brand context from Hyperspell memories (which includes uploaded documents, brand guidelines, and business information)",
+      "context": "Why this is relevant based on the user's brand context from Memory (which includes uploaded documents, brand guidelines, and business information)",
       "reasoning": "Brief explanation of why this topic would work well",
       "score": 85.5,
       "source": "linkedin_scored"
@@ -4003,13 +5010,13 @@ async def create_informational_video(request: InformationalVideoRequest):
         # Step 3.5: Enhance with Hyperspell memory context (reusable helper)
         memory_query = f"{request.username} {profile_context.get('biography', '')[:100]} {document_context[:100] if document_context else ''}".strip()
         if memory_query:
-            hyperspell_context = await get_hyperspell_context(
-                hyperspell_service=hyperspell_service,
+            memory_context = await get_memory_context(
+                memory_service=memory_service,
                 query=memory_query,
                 user_email=None
             )
-            if hyperspell_context:
-                page_context_summary = f"""{hyperspell_context}
+            if memory_context:
+                page_context_summary = f"""{memory_context}
 
 {page_context_summary}"""
         
@@ -4553,8 +5560,8 @@ async def get_video_options(request: VideoOptionsRequest):
         
         # Enhance with Hyperspell memory context (reusable helper)
         memory_query = document_context[:200] if document_context else ""
-        hyperspell_context = await get_hyperspell_context(
-            hyperspell_service=hyperspell_service,
+        memory_context = await get_memory_context(
+            memory_service=memory_service,
             query=memory_query,
             user_email=None
         )
@@ -4629,8 +5636,8 @@ async def create_video_from_documents(request: DocumentVideoRequest):
         
         # Get Hyperspell memory context for enhanced personalization (reusable helper)
         memory_query = f"{request.topic or ''} {document_context[:200] if document_context else ''}".strip()
-        hyperspell_context = await get_hyperspell_context(
-            hyperspell_service=hyperspell_service,
+        memory_context = await get_memory_context(
+            memory_service=memory_service,
             query=memory_query,
             user_email=None  # Can add user auth later
         )
@@ -5049,9 +6056,13 @@ async def get_user_context():
         # TODO: Get user_id from authentication token
         user_id = "guest_user"  # Placeholder - replace with actual user ID from auth
         
-        context = user_context_service.get_user_context(user_id)
+        context_dict = user_context_service.get_user_context(user_id)
         
-        return UserContextResponse(**context)
+        # Convert dict to JSON string for the response
+        import json
+        context_str = json.dumps(context_dict, indent=2)
+        
+        return UserContextResponse(context=context_str)
     except Exception as e:
         print(f"[API] Error getting user context: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -5086,7 +6097,7 @@ async def get_hyperspell_connect_url(current_user: User = Depends(get_current_us
         if not current_user:
             raise HTTPException(status_code=401, detail="Authentication required")
         
-        if not hyperspell_service.is_available():
+        if not memory_service.is_available():
             raise HTTPException(
                 status_code=503,
                 detail="Hyperspell service is not available. Please set HYPERSPELL_API_KEY environment variable."
@@ -5094,7 +6105,7 @@ async def get_hyperspell_connect_url(current_user: User = Depends(get_current_us
         
         # Use email as user_id to match Hyperspell dashboard format
         hyperspell_user_id = current_user.email
-        connect_url = hyperspell_service.get_connect_url(hyperspell_user_id)
+        connect_url = memory_service.get_connect_url(hyperspell_user_id)
         
         return {
             "connect_url": connect_url,
@@ -5126,7 +6137,7 @@ async def query_hyperspell_memories(
         if not current_user:
             raise HTTPException(status_code=401, detail="Authentication required")
         
-        if not hyperspell_service.is_available():
+        if not memory_service.is_available():
             raise HTTPException(
                 status_code=503,
                 detail="Hyperspell service is not available. Please set HYPERSPELL_API_KEY environment variable."
@@ -5140,7 +6151,7 @@ async def query_hyperspell_memories(
         if not query_text:
             raise HTTPException(status_code=400, detail="Query text is required")
         
-        result = await hyperspell_service.query_memories(hyperspell_user_id, query_text, max_results)
+        result = await memory_service.query_memories(hyperspell_user_id, query_text, max_results)
         
         if result is None:
             raise HTTPException(
@@ -5168,7 +6179,7 @@ async def get_context_summaries(
         if not current_user:
             raise HTTPException(status_code=401, detail="Authentication required")
         
-        if not hyperspell_service.is_available():
+        if not memory_service.is_available():
             raise HTTPException(
                 status_code=503,
                 detail="Hyperspell service is not available. Please set HYPERSPELL_API_KEY environment variable."
@@ -5184,12 +6195,12 @@ async def get_context_summaries(
         user_id = current_user.email.lower().strip()
         print(f"[API] Getting context summaries for user: {user_id}")
         
-        # Step 1: Get ALL memories using the same method as marketing posts
-        print(f"[API] Getting ALL Hyperspell memories (same as marketing posts)...")
-        all_memories_context = await hyperspell_service.get_all_memories_context(user_id)
+        # Step 1: Get unified brand context from Memory (S3 + Mem0)
+        print(f"[API] Getting unified brand context from Memory (S3 + Mem0)...")
+        all_memories_context = await memory_service.get_all_memories_context(user_id)
         
         if not all_memories_context or len(all_memories_context.strip()) < 10:
-            print(f"[API] No memories found for user: {user_id}")
+            print(f"[API] No unified brand context found for user: {user_id}")
             return {
                 "overall_summary": "No context available. Upload documents, add competitors, or generate posts to build your brand context.",
                 "brand_context": "No brand context available. Upload documents about your brand, products, or services.",
@@ -5197,33 +6208,17 @@ async def get_context_summaries(
                 "market_context": "No market context available. Add market research or industry information."
             }
         
-        print(f"[API] ✓ Retrieved all memories ({len(all_memories_context)} chars)")
+        print(f"[API] ✓ Retrieved unified brand context ({len(all_memories_context)} chars)")
         
-        # Step 1.5: Get brand-specific context for better brand summary
-        brand_memories_context = await hyperspell_service.query_memories(user_id, "brand guidelines company information products services brand identity business context", max_results=50)
-        brand_context_text = ""
-        if brand_memories_context and brand_memories_context.get("answer"):
-            brand_context_text = str(brand_memories_context.get("answer", "")).strip()
-            print(f"[API] ✓ Retrieved brand-specific memories ({len(brand_context_text)} chars)")
-        
-        # Step 1.6: Get competitor-specific context for better competitor summary
-        competitor_memories_context = await hyperspell_service.query_memories(user_id, "competitors competitive analysis competitor", max_results=50)
-        competitor_context_text = ""
-        if competitor_memories_context and competitor_memories_context.get("answer"):
-            competitor_context_text = str(competitor_memories_context.get("answer", "")).strip()
-            print(f"[API] ✓ Retrieved competitor-specific memories ({len(competitor_context_text)} chars)")
-        
-        # Combine general context with brand-specific context for brand summary
-        combined_brand_context = f"{all_memories_context}\n\n{brand_context_text}" if brand_context_text else all_memories_context
-        
-        # Combine general context with competitor-specific context for competitor summary
-        combined_competitor_context = f"{all_memories_context}\n\n{competitor_context_text}" if competitor_context_text else all_memories_context
+        # Use unified context for all summaries (brand context contains all user information)
+        combined_brand_context = all_memories_context
+        combined_competitor_context = all_memories_context
         
         # Step 2: Use GPT to generate summaries for each section (all using the same context)
         import asyncio
         
         async def generate_summary(prompt: str, section_name: str) -> str:
-            """Helper to generate a summary using GPT"""
+            """Helper to generate a summary using Claude (Bedrock) or OpenAI"""
             try:
                 # Custom system message for specific contexts
                 system_message = f"You are an expert at analyzing and summarizing brand context. Extract and summarize relevant information for {section_name}."
@@ -5232,23 +6227,74 @@ async def get_context_summaries(
                 elif "brand" in section_name.lower():
                     system_message = "You are an expert at identifying and summarizing brand information. Your task is to extract ALL brand-specific details including brand guidelines, company information, products, services, company values, brand identity, and business context from the provided context. Be thorough and include specific brand details when found."
                 
-                completion = await openai_service.client.chat.completions.create(
-                    model=openai_service.model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": system_message
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ],
-                    temperature=0.7,
-                    max_tokens=500
-                )
-                summary = completion.choices[0].message.content.strip()
-                print(f"[API] ✓ Generated {section_name} summary ({len(summary)} chars)")
+                summary = None
+                llm_used = None
+                
+                # Try Bedrock (Claude Sonnet 4.5) first
+                if bedrock_service and bedrock_service.is_available():
+                    try:
+                        # Use Claude Sonnet 4.5 inference profile ARN
+                        sonnet_4_5_arn = "arn:aws:bedrock:us-east-1:222634391096:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+                        print(f"[API] 🤖 Using AWS Bedrock (Claude Sonnet 4.5) for {section_name} summary...")
+                        summary = await bedrock_service.generate_text(
+                            prompt=prompt,
+                            system_message=system_message,
+                            max_tokens=500,
+                            temperature=0.7,
+                            model=sonnet_4_5_arn,
+                            use_converse_api=True  # Required for Sonnet 4.5
+                        )
+                        if summary:
+                            llm_used = "AWS Bedrock (Claude Sonnet 4.5)"
+                            print(f"[API] ✅ {section_name} summary generated with {llm_used} ({len(summary)} chars)")
+                            return summary
+                    except Exception as bedrock_error:
+                        print(f"[API] ⚠️ AWS Bedrock failed for {section_name}, trying Anthropic Claude API: {bedrock_error}")
+                else:
+                    print(f"[API] ℹ️ AWS Bedrock not available for {section_name}, trying Anthropic Claude API...")
+                
+                # Fallback to Anthropic Claude API
+                if not summary and openai_service and openai_service.claude_available:
+                    try:
+                        print(f"[API] 🤖 Using Anthropic Claude API (direct) for {section_name} summary...")
+                        summary = await openai_service.generate_text_with_claude(
+                            prompt=prompt,
+                            system_message=system_message,
+                            max_tokens=500,
+                            temperature=0.7
+                        )
+                        if summary:
+                            llm_used = "Anthropic Claude API (direct)"
+                            print(f"[API] ✅ {section_name} summary generated with {llm_used} ({len(summary)} chars)")
+                            return summary
+                    except Exception as claude_error:
+                        print(f"[API] ⚠️ Anthropic Claude API failed for {section_name} (may have hit usage limits), falling back to OpenAI: {claude_error}")
+                else:
+                    if not summary:
+                        print(f"[API] ℹ️ Anthropic Claude API not available for {section_name}, using OpenAI...")
+                
+                # Final fallback to OpenAI
+                if not summary:
+                    print(f"[API] 🤖 Using OpenAI ({openai_service.model}) for {section_name} summary...")
+                    completion = await openai_service.client.chat.completions.create(
+                        model=openai_service.model,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": system_message
+                            },
+                            {
+                                "role": "user",
+                                "content": prompt
+                            }
+                        ],
+                        temperature=0.7,
+                        max_tokens=500
+                    )
+                    summary = completion.choices[0].message.content.strip()
+                    llm_used = f"OpenAI ({openai_service.model})"
+                    print(f"[API] ✅ {section_name} summary generated with {llm_used} ({len(summary)} chars)")
+                
                 return summary
             except Exception as e:
                 print(f"[API] Error generating {section_name} summary: {e}")
@@ -5335,7 +6381,7 @@ async def upload_to_hyperspell(
         if not current_user:
             raise HTTPException(status_code=401, detail="Authentication required")
         
-        if not hyperspell_service.is_available():
+        if not memory_service.is_available():
             raise HTTPException(
                 status_code=503,
                 detail="Hyperspell service is not available. Please set HYPERSPELL_API_KEY environment variable."
@@ -5344,8 +6390,7 @@ async def upload_to_hyperspell(
         # Use email as user_id to match Hyperspell dashboard format
         # Normalize email (lowercase, no whitespace) to ensure consistency
         hyperspell_user_id = current_user.email.lower().strip()
-        print(f"[API] Uploading document to Hyperspell for user: {hyperspell_user_id}")
-        print(f"[API] CRITICAL: Using normalized email '{hyperspell_user_id}' - must match query format!")
+        print(f"[API] Uploading document to Memory (S3 + Mem0) for user: {hyperspell_user_id}")
         
         # Save uploaded file temporarily
         import tempfile
@@ -5371,31 +6416,47 @@ async def upload_to_hyperspell(
                     print(f"[API] Warning: Failed to extract text from {file.filename}: {e}")
                     # Continue with binary upload as fallback
             
-            # If we have extracted text, save it as text memory (more searchable)
+            # If we have extracted text, append it to unified brand context memory
             if text_content and len(text_content.strip()) > 0:
-                print(f"[API] Saving extracted text to Hyperspell as text memory")
-                result = await hyperspell_service.add_text_memory(
+                print(f"[API] Appending document to unified brand context memory")
+                document_content = f"Document: {file.filename}\n\n{text_content}"
+                result = await memory_service.append_to_unified_brand_context(
                     user_id=hyperspell_user_id,
-                    text=f"Document: {file.filename}\n\n{text_content}",
-                    collection="documents"
+                    new_content=document_content,
+                    content_type="document"
                 )
                 
                 if result is None:
                     raise HTTPException(
                         status_code=500,
-                        detail="Failed to save document text to Hyperspell"
+                        detail="Failed to save document to unified brand context. Hyperspell did not return a valid resource_id."
                     )
+                
+                # Double-check: Verify resource_id exists
+                resource_id = result.get("resource_id")
+                if not resource_id or (isinstance(resource_id, str) and len(resource_id.strip()) == 0):
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to save document: Hyperspell returned invalid resource_id. Memory may not have been created."
+                    )
+                
+                # Verify memory was actually created
+                verified = result.get("verified", False)
+                if not verified:
+                    print(f"[API] ⚠️ WARNING: Document saved but verification incomplete. Resource ID: {resource_id}")
                 
                 return {
                     "success": True,
-                    "resource_id": result.get("resource_id"),
+                    "resource_id": resource_id,
                     "filename": file.filename,
-                    "message": "Document text extracted and saved successfully to Hyperspell memory layer"
+                    "message": "Document added to unified brand context successfully" if verified else "Document saved (verification pending)",
+                    "context_updated": True,  # Flag to indicate context was updated
+                    "verified": verified  # Indicates memory was verified in Hyperspell
                 }
             else:
                 # Fallback: Upload binary file (for unsupported formats or extraction failures)
                 print(f"[API] Uploading binary file to Hyperspell (text extraction not available)")
-                result = await hyperspell_service.upload_document(
+                result = await memory_service.upload_document(
                     user_id=hyperspell_user_id,
                     file_path=tmp_path,
                     filename=file.filename
@@ -5404,14 +6465,23 @@ async def upload_to_hyperspell(
                 if result is None:
                     raise HTTPException(
                         status_code=500,
-                        detail="Failed to upload document to Hyperspell"
+                        detail="Failed to upload document to Hyperspell. Hyperspell did not return a valid resource_id."
+                    )
+                
+                # Double-check: Verify resource_id exists
+                resource_id = result.get("resource_id")
+                if not resource_id or (isinstance(resource_id, str) and len(resource_id.strip()) == 0):
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to upload document: Hyperspell returned invalid resource_id. Memory may not have been created."
                     )
                 
                 return {
                     "success": True,
-                    "resource_id": result.get("resource_id"),
+                    "resource_id": resource_id,
                     "filename": result.get("filename"),
-                    "message": "Document uploaded successfully to Hyperspell memory layer"
+                    "message": "Document uploaded successfully to Hyperspell memory layer",
+                    "verified": result.get("verified", False)
                 }
         finally:
             # Clean up temporary file
@@ -5432,6 +6502,8 @@ async def add_hyperspell_memory(
 ):
     """
     Add a text memory to Hyperspell memory layer.
+    For brand context related content (competitors, brand info, etc.), uses unified brand context.
+    For other content, uses regular memory storage.
     
     Request body:
     {
@@ -5440,7 +6512,7 @@ async def add_hyperspell_memory(
     }
     """
     try:
-        if not hyperspell_service.is_available():
+        if not memory_service.is_available():
             raise HTTPException(
                 status_code=503,
                 detail="Hyperspell service is not available. Please set HYPERSPELL_API_KEY environment variable."
@@ -5454,27 +6526,54 @@ async def add_hyperspell_memory(
         # Normalize email (lowercase, no whitespace) to ensure consistency
         user_id = current_user.email.lower().strip() if current_user else "anonymous"
         
-        print(f"[API] Adding text memory to Hyperspell for user: {user_id}")
-        print(f"[API] CRITICAL: Using normalized email '{user_id}' - must match query format!")
+        # Brand context related collections should use unified brand context
+        brand_context_collections = ["competitors", "brand_context", "brand", "documents", "company", "market"]
+        use_unified = collection.lower() in [c.lower() for c in brand_context_collections]
         
-        result = await hyperspell_service.add_text_memory(
-            user_id=user_id,
-            text=text,
-            collection=collection
-        )
+        if use_unified:
+            print(f"[API] Adding to unified brand context for user: {user_id} (collection: {collection})")
+            result = await memory_service.append_to_unified_brand_context(
+                user_id=user_id,
+                new_content=text,
+                content_type=collection
+            )
+            message = "Content added to unified brand context successfully"
+        else:
+            print(f"[API] Adding text memory to Hyperspell for user: {user_id} (collection: {collection})")
+            result = await memory_service.add_text_memory(
+                user_id=user_id,
+                text=text,
+                collection=collection
+            )
+            message = "Memory added successfully to Hyperspell"
         
         if result is None:
             raise HTTPException(
                 status_code=500,
-                detail="Failed to add memory to Hyperspell"
+                detail="Failed to add memory to Hyperspell. Hyperspell did not return a valid resource_id."
             )
+        
+        # Double-check: Verify resource_id exists
+        resource_id = result.get("resource_id")
+        if not resource_id or (isinstance(resource_id, str) and len(resource_id.strip()) == 0):
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to add memory: Hyperspell returned invalid resource_id. Memory may not have been created."
+            )
+        
+        # Verify memory was actually created
+        verified = result.get("verified", False)
+        if not verified:
+            print(f"[API] ⚠️ WARNING: Memory saved but verification incomplete. Resource ID: {resource_id}")
         
         return {
             "success": True,
-            "resource_id": result.get("resource_id"),
-            "message": "Memory added successfully to Hyperspell",
-            "text_preview": result.get("text_preview"),
-            "collection": result.get("collection")
+            "resource_id": resource_id,
+            "message": message if verified else f"{message} (verification pending)",
+            "text_preview": result.get("text_preview") or text[:100] + "..." if len(text) > 100 else text,
+            "collection": result.get("collection") or collection,
+            "context_updated": use_unified,  # Flag to indicate brand context was updated
+            "verified": verified  # Indicates memory was verified in Hyperspell
         }
         
     except HTTPException:
@@ -5493,7 +6592,7 @@ async def get_hyperspell_status():
     Public endpoint - no authentication required.
     """
     try:
-        available = hyperspell_service.is_available()
+        available = memory_service.is_available()
         return {
             "available": available,
             "message": "Hyperspell is available" if available else "Hyperspell is not configured. Set HYPERSPELL_API_KEY environment variable."
@@ -5521,7 +6620,7 @@ async def get_mcp_server_info():
             "mcp_server_available": True,
             "mcp_server_path": mcp_server_path,
             "start_script_path": start_script_path,
-            "hyperspell_available": hyperspell_service.is_available(),
+            "hyperspell_available": memory_service.is_available(),
             "configuration": {
                 "claude_desktop": {
                     "macos_path": "~/Library/Application Support/Claude/claude_desktop_config.json",
@@ -5554,6 +6653,287 @@ async def get_mcp_server_info():
     except Exception as e:
         print(f"[API] Error getting MCP server info: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===== SEO/AEO ENDPOINTS =====
+@app.post("/api/seo-aeo/analyze", response_model=SEOAEOSummary)
+async def analyze_seo_aeo(request: SEOAEOAnalysisRequest):
+    """
+    Start SEO/AEO analysis for a brand.
+    Analyzes brand mentions in LLM responses, tracks competitors, and identifies sources.
+    """
+    if not seo_aeo_service:
+        raise HTTPException(status_code=503, detail="SEO/AEO service not available. OpenAI API key required.")
+    
+    try:
+        # Analyze website if URL provided
+        brand_info = None
+        if request.brand_url:
+            brand_info = await seo_aeo_service.analyze_website(request.brand_url)
+        
+        # Generate prompts
+        prompts = await seo_aeo_service.generate_prompts(
+            brand_name=request.brand_name,
+            brand_info=brand_info,
+            topics=request.topics,
+            num_prompts=request.num_prompts
+        )
+        
+        # Analyze prompts (this may take a while, so we'll do it in background)
+        # For now, we'll do a smaller batch synchronously and return results
+        # In production, you'd want to make this async with job tracking
+        
+        # Limit to first 20 for initial response (can be made async later)
+        sample_prompts = prompts[:min(20, len(prompts))]
+        results = await seo_aeo_service.analyze_batch_prompts(
+            prompts=sample_prompts,
+            brand_name=request.brand_name,
+            competitors=request.competitors
+        )
+        
+        # Calculate statistics
+        total_tested = len(results)
+        brand_mentions = sum(1 for r in results if r.get("brand_mentioned", False))
+        mention_rate = (brand_mentions / total_tested * 100) if total_tested > 0 else 0
+        
+        # Collect all sources
+        all_sources = []
+        source_counts = {}
+        for result in results:
+            for source in result.get("sources", []):
+                domain = source.get("domain", "")
+                if domain:
+                    source_counts[domain] = source_counts.get(domain, 0) + 1
+                    if domain not in [s.get("domain") for s in all_sources]:
+                        source_type = await seo_aeo_service.categorize_source(domain)
+                        all_sources.append({
+                            "domain": domain,
+                            "url": source.get("url", ""),
+                            "title": source.get("title"),
+                            "snippet": source.get("snippet"),
+                            "source_type": source_type
+                        })
+        
+        # Sort sources by count
+        top_sources = sorted(
+            [{"domain": d, "mention_count": c} for d, c in source_counts.items()],
+            key=lambda x: x["mention_count"],
+            reverse=True
+        )[:10]
+        
+        # Add source types to top sources
+        for source in top_sources:
+            source["source_type"] = await seo_aeo_service.categorize_source(source["domain"])
+        
+        # Calculate competitor stats
+        competitor_stats = []
+        if request.competitors:
+            for competitor in request.competitors:
+                mentions = sum(1 for r in results if competitor in r.get("competitors_mentioned", []))
+                rate = (mentions / total_tested * 100) if total_tested > 0 else 0
+                competitor_stats.append({
+                    "competitor": competitor,
+                    "mention_rate": round(rate, 1),
+                    "total_prompts": total_tested,
+                    "mentions": mentions
+                })
+        
+        # Find top competitor
+        top_competitor = None
+        top_competitor_rate = None
+        if competitor_stats:
+            top_comp = max(competitor_stats, key=lambda x: x["mention_rate"])
+            top_competitor = top_comp["competitor"]
+            top_competitor_rate = top_comp["mention_rate"]
+        
+        # Group by topic (simplified - in production, you'd extract topics from prompts)
+        topic_stats = []
+        # For now, create a simple topic distribution
+        # In production, you'd analyze prompts to extract actual topics
+        
+        # Format recent results
+        recent_results = []
+        for result in results[:10]:
+            sources_list = [
+                SourceCitation(
+                    domain=s.get("domain", ""),
+                    url=s.get("url", ""),
+                    title=s.get("title"),
+                    snippet=s.get("snippet")
+                )
+                for s in result.get("sources", [])
+            ]
+            recent_results.append(PromptResult(
+                prompt=result.get("prompt", ""),
+                topic="General",  # Would be extracted from prompt analysis
+                brand_mentioned=result.get("brand_mentioned", False),
+                response=result.get("response", "")[:200] + "..." if len(result.get("response", "")) > 200 else result.get("response", ""),
+                sources=sources_list,
+                competitors_mentioned=result.get("competitors_mentioned", []),
+                created_at=datetime.now().isoformat()
+            ))
+        
+        return SEOAEOSummary(
+            brand_mention_rate=round(mention_rate, 1),
+            total_prompts_tested=total_tested,
+            total_mentions=brand_mentions,
+            top_competitor=top_competitor,
+            top_competitor_rate=top_competitor_rate,
+            total_sources=len(all_sources)
+        )
+        
+    except Exception as e:
+        print(f"[API] Error in SEO/AEO analysis: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to analyze SEO/AEO: {str(e)}")
+
+
+@app.post("/api/seo-aeo/full-analysis")
+async def full_seo_aeo_analysis(request: SEOAEOAnalysisRequest):
+    """
+    Run full SEO/AEO analysis with all prompts (may take longer).
+    Returns complete analysis with all statistics.
+    Note: This endpoint may take several minutes to complete depending on num_prompts.
+    """
+    """
+    Run full SEO/AEO analysis with all prompts (may take longer).
+    Returns complete analysis with all statistics.
+    """
+    print(f"[API] SEO/AEO Analysis request received: brand={request.brand_name}, prompts={request.num_prompts}")
+    if not seo_aeo_service:
+        raise HTTPException(status_code=503, detail="SEO/AEO service not available. OpenAI API key required.")
+    
+    try:
+        print(f"[API] Starting SEO/AEO analysis for brand: {request.brand_name}")
+        # Analyze website if URL provided
+        brand_info = None
+        if request.brand_url:
+            print(f"[API] Analyzing website: {request.brand_url}")
+            brand_info = await seo_aeo_service.analyze_website(request.brand_url)
+            print(f"[API] Website analysis complete")
+        
+        # Generate prompts
+        print(f"[API] Generating {request.num_prompts} prompts...")
+        prompts = await seo_aeo_service.generate_prompts(
+            brand_name=request.brand_name,
+            brand_info=brand_info,
+            topics=request.topics,
+            num_prompts=request.num_prompts
+        )
+        print(f"[API] Generated {len(prompts)} prompts")
+        
+        # Analyze all prompts (this is the time-consuming part)
+        print(f"[API] Starting batch analysis of {len(prompts)} prompts...")
+        results = await seo_aeo_service.analyze_batch_prompts(
+            prompts=prompts,
+            brand_name=request.brand_name,
+            competitors=request.competitors,
+            max_concurrent=5
+        )
+        print(f"[API] Batch analysis complete: {len(results)} results")
+        
+        # Calculate statistics
+        total_tested = len(results)
+        brand_mentions = sum(1 for r in results if r.get("brand_mentioned", False))
+        mention_rate = (brand_mentions / total_tested * 100) if total_tested > 0 else 0
+        
+        # Collect all sources
+        all_sources = []
+        source_counts = {}
+        for result in results:
+            for source in result.get("sources", []):
+                domain = source.get("domain", "")
+                if domain:
+                    source_counts[domain] = source_counts.get(domain, 0) + 1
+                    if domain not in [s.get("domain") for s in all_sources]:
+                        source_type = await seo_aeo_service.categorize_source(domain)
+                        all_sources.append({
+                            "domain": domain,
+                            "url": source.get("url", ""),
+                            "title": source.get("title"),
+                            "snippet": source.get("snippet"),
+                            "source_type": source_type
+                        })
+        
+        # Sort sources by count
+        top_sources = sorted(
+            [{"domain": d, "mention_count": c} for d, c in source_counts.items()],
+            key=lambda x: x["mention_count"],
+            reverse=True
+        )[:10]
+        
+        # Add source types to top sources
+        for source in top_sources:
+            source["source_type"] = await seo_aeo_service.categorize_source(source["domain"])
+        
+        # Calculate competitor stats
+        competitor_stats = []
+        top_competitor = None
+        top_competitor_rate = None
+        
+        if request.competitors:
+            for competitor in request.competitors:
+                mentions = sum(1 for r in results if competitor in r.get("competitors_mentioned", []))
+                rate = (mentions / total_tested * 100) if total_tested > 0 else 0
+                competitor_stats.append({
+                    "competitor": competitor,
+                    "mention_rate": round(rate, 1),
+                    "total_prompts": total_tested,
+                    "mentions": mentions
+                })
+            
+            if competitor_stats:
+                top_comp = max(competitor_stats, key=lambda x: x["mention_rate"])
+                top_competitor = top_comp["competitor"]
+                top_competitor_rate = top_comp["mention_rate"]
+        
+        # Format recent results
+        recent_results = []
+        for result in results[:20]:
+            sources_list = [
+                SourceCitation(
+                    domain=s.get("domain", ""),
+                    url=s.get("url", ""),
+                    title=s.get("title"),
+                    snippet=s.get("snippet")
+                )
+                for s in result.get("sources", [])
+            ]
+            recent_results.append(PromptResult(
+                prompt=result.get("prompt", ""),
+                topic="General",  # Would be extracted from prompt analysis
+                brand_mentioned=result.get("brand_mentioned", False),
+                response=result.get("response", "")[:200] + "..." if len(result.get("response", "")) > 200 else result.get("response", ""),
+                sources=sources_list,
+                competitors_mentioned=result.get("competitors_mentioned", []),
+                created_at=datetime.now().isoformat()
+            ))
+        
+        # Create topic stats (simplified - in production, extract from prompts)
+        topic_stats = []
+        
+        # Return summary with all data
+        result = {
+            "brand_mention_rate": round(mention_rate, 1),
+            "total_prompts_tested": total_tested,
+            "total_mentions": brand_mentions,
+            "top_competitor": top_competitor,
+            "top_competitor_rate": top_competitor_rate,
+            "total_sources": len(all_sources),
+            "topics": topic_stats,
+            "competitors": competitor_stats,
+            "top_sources": top_sources,
+            "recent_results": [r.dict() if hasattr(r, 'dict') else r for r in recent_results]
+        }
+        print(f"[API] SEO/AEO Analysis complete: {total_tested} prompts tested, {brand_mentions} mentions ({mention_rate:.1f}%)")
+        return result
+        
+    except Exception as e:
+        print(f"[API] Error in full SEO/AEO analysis: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to run full analysis: {str(e)}")
 
 
 if __name__ == "__main__":

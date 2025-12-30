@@ -606,12 +606,19 @@ class ImageGenerationService:
                     print(f"{str(data)[:2000]}")
                     raise Exception(f"No image data found in Imagen response. Response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
                 
+                # Validate base64 string
+                if not image_base64 or len(image_base64) < 100:
+                    raise Exception(f"Invalid image data: base64 string too short ({len(image_base64) if image_base64 else 0} chars)")
+                
                 # Convert base64 to data URL for immediate use
                 image_data_url = f"data:image/png;base64,{image_base64}"
                 
                 print(f"[ImageGen] ✅ Successfully generated image with {model_name}")
+                print(f"[ImageGen] Image base64 length: {len(image_base64)} characters")
+                print(f"[ImageGen] Image data URL length: {len(image_data_url)} characters")
+                print(f"[ImageGen] Image URL preview: {image_data_url[:100]}...")
                 
-                return {
+                result = {
                     "image_base64": image_base64,
                     "image_url": image_data_url,  # Data URL for immediate use
                     "revised_prompt": prompt,  # Imagen may revise, but we'll use original for now
@@ -620,6 +627,9 @@ class ImageGenerationService:
                     "quality": quality,
                     "aspect_ratio": aspect_ratio
                 }
+                
+                print(f"[ImageGen] Returning result with keys: {list(result.keys())}")
+                return result
         except httpx.HTTPStatusError as e:
             error_text = e.response.text[:500] if e.response.text else str(e)
             print(f"[ImageGen] Imagen API error: {e.response.status_code}")

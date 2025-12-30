@@ -122,3 +122,7 @@ When deploying to production:
 - `GET /api/integrations/jira/issues?jql=...` - List issues (optional JQL query)
 - `POST /api/integrations/import` - Import issues to Hyperspell (use issue keys in `item_ids`)
 
+
+
+
+

@@ -11,7 +11,10 @@ import Settings from './Settings.jsx'
 import BrandContext from './BrandContext.jsx'
 import DocumentVideo from './DocumentVideo.jsx'
 import MarketingPost from './MarketingPost.jsx'
-import { Menu, X as XIcon, Instagram, Linkedin, Music, MessageSquare, Settings as SettingsIcon, FileVideo, Sparkles, FileText } from 'lucide-react'
+import AigisMarketing from './AigisMarketing.jsx'
+import VeoVideo from './VeoVideo.jsx'
+import SEOAEOTracker from './SEOAEOTracker.jsx'
+import { Menu, X as XIcon, Instagram, Linkedin, Music, MessageSquare, Settings as SettingsIcon, FileVideo, Sparkles, FileText, PenTool, Video, TrendingUp } from 'lucide-react'
 import '../App.css'
 
 function Dashboard() {
@@ -114,6 +117,9 @@ function Dashboard() {
   const socialMediaTabs = [
     { id: 'chat', label: 'Chat', icon: null },
     { id: 'marketing-post', label: 'Marketing Post', icon: Sparkles },
+    { id: 'aigis-marketing', label: 'Aigis Marketing', icon: PenTool },
+    { id: 'veo-video', label: 'Video Generation', icon: Video },
+    { id: 'seo-aeo-tracker', label: 'SEO/AEO Tracker', icon: TrendingUp },
     { id: 'brand-context', label: 'Brand Context', icon: FileText },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
     // Hidden for now - not implemented yet:
@@ -129,6 +135,12 @@ function Dashboard() {
     switch (activeTab) {
       case 'marketing-post':
         return <MarketingPost />
+      case 'aigis-marketing':
+        return <AigisMarketing />
+      case 'veo-video':
+        return <VeoVideo />
+      case 'seo-aeo-tracker':
+        return <SEOAEOTracker />
       case 'brand-context':
         return <BrandContext />
       case 'document-video':

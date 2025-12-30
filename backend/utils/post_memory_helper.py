@@ -41,6 +41,7 @@ async def save_post_to_memory(
     
     try:
         # Format post data as structured JSON for Hyperspell
+        # Note: image_base64 is NOT stored (too large), only image_url (file path)
         post_memory = {
             "type": "marketing_post",
             "user_id": user_id,
@@ -48,6 +49,7 @@ async def save_post_to_memory(
             "caption": post_data.get("caption", ""),
             "hashtags": post_data.get("hashtags", []),
             "image_prompt": post_data.get("image_prompt", ""),
+            "image_url": post_data.get("image_url"),  # Store file URL only (not base64)
             "created_at": post_data.get("created_at", datetime.now().isoformat()),
             "post_id": post_data.get("post_id"),
             "post_url": post_data.get("post_url"),
@@ -59,12 +61,15 @@ async def save_post_to_memory(
         
         # Create a searchable text representation
         # Include user_id prominently for filtering
+        # Note: Image data (base64) is stored in metadata but not in text for size reasons
         memory_text = f"""Marketing Post - {post_data.get('topic', 'Unknown Topic')}
 User ID: {user_id}
 
 Caption: {post_data.get('caption', '')}
 Hashtags: {', '.join(post_data.get('hashtags', []))}
 Image Prompt: {post_data.get('image_prompt', '')}
+Image URL: {post_data.get('image_url', 'N/A')[:100] if post_data.get('image_url') else 'N/A'}
+Image Available: {'Yes' if (post_data.get('image_base64') or post_data.get('image_url')) else 'No'}
 Created: {post_data.get('created_at', datetime.now().isoformat())}
 Post ID: {post_data.get('post_id', 'N/A')}
 Post URL: {post_data.get('post_url', 'N/A')}
@@ -95,6 +100,92 @@ Full Metadata:
         print(f"[PostMemory] Error saving post to memory: {e}")
         import traceback
         traceback.print_exc()
+        return None
+
+
+async def find_existing_post_with_image(
+    hyperspell_service: HyperspellService,
+    user_id: str,
+    topic: str,
+    image_prompt: str = None
+) -> Optional[Dict]:
+    """
+    Find an existing post with the same topic/image_prompt that has image data
+    
+    Args:
+        hyperspell_service: HyperspellService instance
+        user_id: User identifier
+        topic: Post topic to search for
+        image_prompt: Optional image prompt to match (more specific matching)
+    
+    Returns:
+        Post dictionary with image data if found, None otherwise
+    """
+    if not hyperspell_service.is_available():
+        return None
+    
+    try:
+        # Search for posts with similar topic
+        query_text = f"marketing post topic {topic} user_id {user_id}"
+        if image_prompt:
+            query_text += f" image prompt {image_prompt[:100]}"
+        
+        search_result = await hyperspell_service.query_memories(
+            user_id=user_id,
+            query=query_text,
+            max_results=20  # Get more results to find the best match
+        )
+        
+        if not search_result:
+            return None
+        
+        results = search_result.get("results", [])
+        
+        # Find the best matching post with image data
+        for result in results:
+            if isinstance(result, dict):
+                content = result.get("content", result.get("text", result.get("snippet", "")))
+                
+                # Filter by user_id
+                if f'"user_id": "{user_id}"' not in content and f"user_id {user_id}" not in content.lower():
+                    continue
+                
+                # Check if topic matches (fuzzy match)
+                topic_match = topic.lower() in content.lower() or content.lower() in topic.lower()
+                if not topic_match:
+                    continue
+                
+                # Check if image_prompt matches if provided (fuzzy match)
+                if image_prompt:
+                    prompt_match = image_prompt[:50].lower() in content.lower() or content.lower()[:50] in image_prompt.lower()
+                    if not prompt_match:
+                        continue
+                
+                # Try to extract post data with image
+                try:
+                    # Look for JSON metadata
+                    if "Full Metadata:" in content:
+                        json_start = content.find("{", content.find("Full Metadata:"))
+                        if json_start != -1:
+                            json_end = content.rfind("}") + 1
+                            if json_end > json_start:
+                                metadata_str = content[json_start:json_end]
+                                metadata = json.loads(metadata_str)
+                                
+                                # Check user_id matches
+                                if metadata.get("user_id") == user_id:
+                                    # Check if it has image URL stored (file path)
+                                    if metadata.get("image_url"):
+                                        print(f"[PostMemory] ✓ Found existing post with image URL for topic: {topic}")
+                                        return metadata
+                except:
+                    pass
+        
+        print(f"[PostMemory] No existing post with image found for topic: {topic}")
+        return None
+        
+    except Exception as e:
+        print(f"[PostMemory] Error finding existing post: {e}")
         return None
 
 

@@ -36,15 +36,21 @@ function FallingPostsGallery() {
           const galleryPosts = staticPosts.map((post, i) => {
             const hue1 = (i * 36) % 360 // Distribute hues evenly
             const hue2 = (hue1 + 60) % 360
-            // Handle image path - if it's a relative path, make it absolute from /static-posts/
+            // Handle image path - ensure consistent path format for both localhost and production
             let imagePath = null
             if (post.image) {
               if (post.image.startsWith('images/')) {
+                // Format: "images/marketing-post-1.png" -> "/static-posts/images/marketing-post-1.png"
                 imagePath = `/static-posts/${post.image}`
+              } else if (post.image.startsWith('/static-posts/')) {
+                // Already in correct format: "/static-posts/images/marketing-post-1.png"
+                imagePath = post.image
               } else if (post.image.startsWith('/')) {
+                // Other absolute paths - keep as is
                 imagePath = post.image
               } else {
-                imagePath = `/static-posts/${post.image}`
+                // Just filename - assume it's in images folder
+                imagePath = `/static-posts/images/${post.image}`
               }
             }
             return {

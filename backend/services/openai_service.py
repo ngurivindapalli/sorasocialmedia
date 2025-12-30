@@ -23,15 +23,15 @@ class OpenAIService:
         print(f"[OpenAI] Using model: {self.model}")
         print(f"[OpenAI] Build Hours: Structured Outputs enabled OK")
         
-        # Store Hyperspell service for memory integration
-        self.hyperspell_service = hyperspell_service
+        # Store Memory service for memory integration (S3 + Mem0)
+        self.memory_service = hyperspell_service  # Parameter name kept for compatibility, but uses MemoryService
         
         # Initialize Claude client if available
         if ANTHROPIC_AVAILABLE and anthropic_key:
             self.claude_client = AsyncAnthropic(api_key=anthropic_key)
             self.claude_available = True
-            hyperspell_status = "with Hyperspell memory" if (hyperspell_service and hyperspell_service.is_available()) else ""
-            print(f"[Claude] Claude API initialized OK {hyperspell_status}")
+            memory_status = "with Memory (S3 + Mem0)" if (hyperspell_service and hyperspell_service.is_available()) else ""
+            print(f"[Claude] Claude API initialized OK {memory_status}")
         else:
             self.claude_client = None
             self.claude_available = False
@@ -40,9 +40,48 @@ class OpenAIService:
             elif not anthropic_key:
                 print(f"[Claude] Anthropic API key not provided")
     
+    async def generate_text_with_claude(
+        self,
+        prompt: str,
+        system_message: str = "You are a helpful assistant.",
+        max_tokens: int = 1000,
+        temperature: float = 0.7,
+        model: str = "claude-3-5-sonnet-20241022"
+    ) -> Optional[str]:
+        """
+        Generate text using Claude API
+        
+        Args:
+            prompt: User prompt
+            system_message: System message/instructions
+            max_tokens: Maximum tokens to generate
+            temperature: Temperature (0.0-1.0)
+            model: Claude model to use
+            
+        Returns:
+            Generated text or None if Claude not available
+        """
+        if not self.claude_available or not self.claude_client:
+            return None
+        
+        try:
+            message = await self.claude_client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system_message,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            return message.content[0].text
+        except Exception as e:
+            print(f"[Claude] Error generating text: {e}")
+            return None
+    
     async def _get_hyperspell_context(self, user_id: str, query: str) -> str:
         """
-        Helper method to get Hyperspell memory context for AI prompts
+        Helper method to get Memory (S3 + Mem0) context for AI prompts
         
         Args:
             user_id: User identifier
@@ -51,14 +90,14 @@ class OpenAIService:
         Returns:
             Formatted context string or empty string if unavailable
         """
-        if not self.hyperspell_service or not self.hyperspell_service.is_available():
+        if not self.memory_service or not self.memory_service.is_available():
             return ""
         
         try:
-            context = await self.hyperspell_service.get_context_summary(user_id, query)
+            context = await self.memory_service.get_context_summary(user_id, query)
             return context
         except Exception as e:
-            print(f"[OpenAI+Hyperspell] Error fetching memory context: {e}")
+            print(f"[OpenAI+Memory] Error fetching memory context: {e}")
             return ""
     
     async def research_topic_context(self, trend_data: Dict) -> str:
@@ -284,20 +323,20 @@ Create a Sora prompt that captures likely visual style, camera work, timing, and
             if llm_provider.lower() == "claude" and self.claude_available:
                 print(f"[Claude] Generating Sora script with Claude...")
                 
-                # Enhance prompt with Hyperspell memory if available
+                # Enhance prompt with Memory (S3 + Mem0) if available
                 enhanced_prompt = prompt
-                if self.hyperspell_service and self.hyperspell_service.is_available():
+                if self.memory_service and self.memory_service.is_available():
                     # Extract query from transcription or metadata for memory lookup
                     memory_query = transcription[:200] if transcription and len(transcription) > 20 else video_metadata.get('text', '')[:200]
                     if memory_query:
                         # Use provided user_id or fallback to metadata or default
                         lookup_user_id = user_id or video_metadata.get('user_id', 'default_user')
-                        hyperspell_context = await self._get_hyperspell_context(lookup_user_id, memory_query)
-                        if hyperspell_context:
-                            enhanced_prompt = f"""{hyperspell_context}
+                        memory_context = await self._get_hyperspell_context(lookup_user_id, memory_query)
+                        if memory_context:
+                            enhanced_prompt = f"""{memory_context}
 
 {prompt}"""
-                            print(f"[Claude+Hyperspell] Enhanced prompt with memory context ({len(hyperspell_context)} chars)")
+                            print(f"[Claude+Memory] Enhanced prompt with memory context ({len(memory_context)} chars)")
                 
                 message = await self.claude_client.messages.create(
                     model="claude-3-5-sonnet-20241022",
@@ -336,26 +375,26 @@ Create a Sora prompt that captures likely visual style, camera work, timing, and
             target_duration: Target video duration in seconds (5-16)
         """
         try:
-            # Enhance page_context with Hyperspell memory if available
+            # Enhance page_context with Memory (S3 + Mem0) if available
             enhanced_page_context = page_context or ""
-            if user_id and self.hyperspell_service and self.hyperspell_service.is_available():
+            if user_id and self.memory_service and self.memory_service.is_available():
                 try:
                     # Build query from transcription and metadata
                     memory_query = f"{transcription[:200]} {video_metadata.get('text', '')[:100]}".strip()
                     if memory_query:
-                        hyperspell_context = await self._get_hyperspell_context(user_id, memory_query)
-                        if hyperspell_context:
-                            enhanced_page_context = f"""{hyperspell_context}
+                        memory_context = await self._get_hyperspell_context(user_id, memory_query)
+                        if memory_context:
+                            enhanced_page_context = f"""{memory_context}
 
 {enhanced_page_context}"""
-                            print(f"[OpenAI+Hyperspell] Enhanced structured script with memory context")
+                            print(f"[OpenAI+Memory] Enhanced structured script with memory context")
                 except Exception as e:
-                    print(f"[OpenAI+Hyperspell] Memory query skipped: {e}")
+                    print(f"[OpenAI+Memory] Memory query skipped: {e}")
             
             # Build context including page context and thumbnail analysis if available
             context = ""
             if enhanced_page_context:
-                context += f"""PAGE/PROFILE CONTEXT (Enhanced with Hyperspell Memory):
+                context += f"""PAGE/PROFILE CONTEXT (Enhanced with Memory - S3 + Mem0):
 {enhanced_page_context}
 
 This context should inform the video's messaging, tone, visual style, and overall approach to align with the page/account identity (works for business, personal, creator, influencer accounts, etc.).

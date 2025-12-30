@@ -5,10 +5,6 @@ from typing import List, Optional, Dict
 class VideoAnalysisRequest(BaseModel):
     username: str = Field(..., description="Instagram username to analyze")
     video_limit: Optional[int] = Field(3, description="Number of videos to analyze (default: 3, max: 10)")
-    video_seconds: Optional[int] = Field(8, description="Duration of generated videos in seconds (5-16 for Sora 2, 4-60 for Veo 3, default: 8)")
-    llm_provider: Optional[str] = Field("openai", description="LLM provider for script generation: 'openai' or 'claude'")
-    video_model: Optional[str] = Field("sora-2", description="Video generation model: 'sora-2' or 'veo-3'")
-    document_ids: Optional[List[str]] = Field(default=[], description="Optional document IDs to include as context")
 
 
 class MultiUserAnalysisRequest(BaseModel):
@@ -16,10 +12,6 @@ class MultiUserAnalysisRequest(BaseModel):
     usernames: List[str] = Field(..., description="List of Instagram usernames (2-5 users)", min_length=2, max_length=5)
     videos_per_user: Optional[int] = Field(2, description="Number of top videos per user (default: 2)")
     combine_style: Optional[str] = Field("fusion", description="How to combine: 'fusion' (blend both styles) or 'sequence' (sequential story)")
-    video_seconds: Optional[int] = Field(12, description="Duration of combined video in seconds (5-16 for Sora 2 Pro, 4-60 for Veo 3, default: 12)")
-    llm_provider: Optional[str] = Field("openai", description="LLM provider for script generation: 'openai' or 'claude'")
-    video_model: Optional[str] = Field("sora-2-pro", description="Video generation model: 'sora-2-pro' or 'veo-3'")
-    document_ids: Optional[List[str]] = Field(default=[], description="Optional document IDs to include as context")
 
 
 class ScrapedVideo(BaseModel):
@@ -80,16 +72,6 @@ class ThumbnailAnalysis(BaseModel):
     style_assessment: str = Field(description="Overall visual style assessment")
 
 
-class SoraVideoJob(BaseModel):
-    """Sora video generation job status"""
-    job_id: str
-    status: str  # queued, in_progress, completed, failed
-    progress: Optional[int] = None
-    model: str
-    video_url: Optional[str] = None  # URL to download completed video
-    created_at: int
-    
-
 class VideoResult(BaseModel):
     """Analyzed video with transcription and Sora script"""
     video_id: str
@@ -101,7 +83,6 @@ class VideoResult(BaseModel):
     sora_script: str
     structured_sora_script: Optional[StructuredSoraScript] = None  # Structured Outputs format
     thumbnail_analysis: Optional[ThumbnailAnalysis] = None  # Vision API analysis
-    sora_video_job: Optional[SoraVideoJob] = None  # Sora video generation job
 
 
 class VideoAnalysisResponse(BaseModel):
@@ -109,7 +90,6 @@ class VideoAnalysisResponse(BaseModel):
     username: str
     scraped_videos: List[ScrapedVideo]
     analyzed_videos: List[VideoResult]
-    page_context: Optional[str] = None  # AI-learned context about the profile/page
 
 
 class CombinedVideoResult(BaseModel):
@@ -122,114 +102,7 @@ class CombinedVideoResult(BaseModel):
     fusion_notes: str = Field(description="Explanation of how the styles were combined")
 
 
-# ===== OAUTH & SOCIAL MEDIA CONNECTION SCHEMAS =====
-class UserSignupRequest(BaseModel):
-    """User signup request"""
-    username: str
-    email: str
-    password: str
-
-
-class UserLoginRequest(BaseModel):
-    """User login request"""
-    email: str
-    password: str
-
-
-class FindCompetitorsRequest(BaseModel):
-    """Request to find competitors based on brand context"""
-    document_id: str
-
-
-# ===== INTEGRATION SCHEMAS =====
-class IntegrationConnectionResponse(BaseModel):
-    id: int
-    platform: str
-    platform_user_email: Optional[str] = None
-    is_active: bool
-    connected_at: str
-    last_synced_at: Optional[str] = None
-
-
-class NotionPageResponse(BaseModel):
-    id: str
-    title: str
-    url: Optional[str] = None
-    last_edited_time: Optional[str] = None
-
-
-class GoogleDriveFileResponse(BaseModel):
-    id: str
-    name: str
-    mime_type: str
-    modified_time: Optional[str] = None
-    size: Optional[str] = None
-    web_view_link: Optional[str] = None
-
-
-class JiraIssueResponse(BaseModel):
-    id: str
-    key: str
-    summary: str
-    status: Optional[str] = None
-    project: Optional[str] = None
-    issue_type: Optional[str] = None
-    priority: Optional[str] = None
-    assignee: Optional[str] = None
-    reporter: Optional[str] = None
-    created: Optional[str] = None
-    updated: Optional[str] = None
-    url: Optional[str] = None
-
-
-class ImportContentRequest(BaseModel):
-    integration_id: int
-    item_ids: List[str] = Field(..., description="List of page/file IDs to import")
-    collection: Optional[str] = Field("documents", description="Hyperspell collection name")
-
-
-class SocialMediaConnectionResponse(BaseModel):
-    """Social media connection response"""
-    id: int
-    platform: str
-    account_username: str
-    account_id: str
-    is_active: bool
-    connected_at: str
-    last_used_at: Optional[str] = None
-
-
-class PostVideoRequest(BaseModel):
-    """Request to post video to social media"""
-    connection_ids: List[int] = Field(..., description="List of connection IDs to post to")
-    video_url: str = Field(..., description="URL to the video file")
-    caption: str = Field(..., description="Post caption")
-    job_id: Optional[str] = Field(None, description="Sora video job ID if applicable")
-
-
-class PostVideoResponse(BaseModel):
-    """Response after posting video"""
-    success: bool
-    posts: List[Dict] = Field(..., description="List of post results per platform")
-    errors: Optional[List[str]] = None
-
-
-class ManualInstagramPostRequest(BaseModel):
-    """Request for manual Instagram posting using browser automation"""
-    video_url: str = Field(..., description="URL to the video file")
-    caption: str = Field(..., description="Post caption")
-    username: str = Field(..., description="Instagram username")
-    password: str = Field(..., description="Instagram password (used only for browser automation)")
-
-
-class ManualInstagramPostResponse(BaseModel):
-    """Response after manual Instagram posting"""
-    success: bool
-    message: str
-    error: Optional[str] = None
-
-
-# ===== VEO 3 & IMAGE GENERATION SCHEMAS =====
+# ===== VEO 3 & VIDEO GENERATION SCHEMAS =====
 class Veo3GenerateRequest(BaseModel):
     """Request to generate a video using Veo 3"""
     prompt: str = Field(..., description="Text description of the video")
@@ -281,187 +154,390 @@ class Veo3ExtendResponse(BaseModel):
     base_job_id: str
 
 
-class ImageGenerateRequest(BaseModel):
-    """Request to generate an image"""
-    prompt: str = Field(..., description="Text description of the image")
-    model: Optional[str] = Field("nanobanana", description="Model to use (nanobanana, dall-e-3, dall-e-2, stable-diffusion)")
-    size: Optional[str] = Field("1024x1024", description="Image size")
-    quality: Optional[str] = Field("medium", description="Image quality (low, medium, high for Nano Banana; standard, hd for DALL-E 3)")
-    style: Optional[str] = Field(None, description="Style preset (vivid, natural for DALL-E 3)")
-    n: Optional[int] = Field(1, description="Number of images to generate")
-    aspect_ratio: Optional[str] = Field(None, description="Aspect ratio for Nano Banana (1:1, 16:9, 4:3, 9:16)")
+class Veo3GenerateWithContextRequest(BaseModel):
+    """Request to generate a Veo video with Mem0 context"""
+    topic: str = Field(..., description="Topic or subject for the video")
+    duration: Optional[int] = Field(8, description="Initial video duration in seconds (4-8)")
+    max_extensions: Optional[int] = Field(0, description="Maximum number of extensions (0-20, each adds 7 seconds)")
+    resolution: Optional[str] = Field("1280x720", description="Video resolution")
+    llm_provider: Optional[str] = Field("openai", description="LLM provider: 'openai' or 'claude'")
+    wait_for_completion: Optional[bool] = Field(True, description="Wait for video and all extensions to complete before returning")
 
 
-class ImageGenerateResponse(BaseModel):
-    """Response from image generation"""
-    image_url: Optional[str] = None
-    image_urls: Optional[List[str]] = None
-    image_base64: Optional[str] = None
-    revised_prompt: Optional[str] = None
-    model: str
-    size: str
-    quality: Optional[str] = None
-    style: Optional[str] = None
-    session_id: Optional[str] = None  # For Nano Banana conversational editing
-    aspect_ratio: Optional[str] = None
+class Veo3GenerateWithContextResponse(BaseModel):
+    """Response from Veo 3 video generation with context"""
+    job_id: str
+    status: str
+    video_url: Optional[str] = None
+    progress: Optional[int] = 0
+    model: str = "veo-3"
+    script: Optional[str] = None
+    script_saved: Optional[bool] = False
+    extensions_completed: Optional[int] = 0
+    final_duration: Optional[int] = None
 
 
+# ===== MARKETING POST SCHEMAS =====
 class MarketingPostRequest(BaseModel):
-    """Request to create a marketing post with image"""
-    topic: str = Field(..., description="Marketing topic or theme for the post")
-    brand_context: Optional[str] = Field(None, description="Optional brand context, tone, or style guidelines")
-    image_prompt: Optional[str] = Field(None, description="Custom image prompt (if not provided, will be generated from topic)")
-    caption_style: Optional[str] = Field("engaging", description="Caption style: 'engaging', 'professional', 'casual', 'educational'")
-    aspect_ratio: Optional[str] = Field("1:1", description="Image aspect ratio: '1:1', '16:9', '9:16', '4:3'")
-    include_hashtags: Optional[bool] = Field(True, description="Include relevant hashtags in caption")
-    post_to_instagram: Optional[bool] = Field(False, description="Automatically post to Instagram (requires credentials)")
-    instagram_username: Optional[str] = Field(None, description="Instagram username for posting")
-    instagram_password: Optional[str] = Field(None, description="Instagram password for posting")
+    """Request to create a marketing post"""
+    topic: str = Field(..., description="Topic for the marketing post")
+    brand_context: Optional[str] = Field(None, description="Brand context information")
+    image_prompt: Optional[str] = Field(None, description="Optional image prompt (will be generated if not provided)")
+    caption_style: Optional[str] = Field("engaging", description="Style for the caption")
+    include_hashtags: Optional[bool] = Field(True, description="Include hashtags in caption")
+    style: Optional[str] = Field(None, description="Visual style")
 
 
 class MarketingPostResponse(BaseModel):
     """Response from marketing post creation"""
     success: bool
     image_url: Optional[str] = None
-    image_base64: Optional[str] = None
-    image_prompt: str
-    caption: str
-    hashtags: Optional[List[str]] = None
-    full_caption: Optional[str] = None
+    caption: Optional[str] = None
     post_id: Optional[str] = None
-    post_url: Optional[str] = None
     error: Optional[str] = None
-    is_first_post: Optional[bool] = False
 
 
 class MarketingPostSuggestion(BaseModel):
-    """A single marketing post topic suggestion"""
-    topic: str = Field(..., description="Suggested topic for the marketing post")
-    context: Optional[str] = Field(None, description="Why this suggestion is relevant based on user's documents/memories")
-    reasoning: Optional[str] = Field(None, description="Brief explanation of why this topic was suggested")
-    score: Optional[float] = Field(None, description="Engagement score (0-100) based on similar high-performing LinkedIn posts")
-    source: Optional[str] = Field(None, description="Source of suggestion: 'linkedin_scored', 'user_context', or 'ai_generated'")
+    """Marketing post suggestion"""
+    topic: str
+    description: Optional[str] = None
 
 
 class MarketingPostSuggestionsResponse(BaseModel):
-    """Response containing marketing post topic suggestions"""
-    suggestions: List[MarketingPostSuggestion] = Field(..., description="List of suggested topics")
-    user_context_used: Optional[str] = Field(None, description="Summary of user context that influenced suggestions")
+    """Response with marketing post suggestions"""
+    success: bool
+    suggestions: List[MarketingPostSuggestion]
+    error: Optional[str] = None
 
 
+# ===== AIGIS MARKETING SCHEMAS =====
+class AigisMarketingRequest(BaseModel):
+    """Request for Aigis Marketing content generation"""
+    topic: str = Field(..., description="Topic for content")
+    style: Optional[str] = Field(None, description="Content style")
+
+
+class AigisMarketingResponse(BaseModel):
+    """Response from Aigis Marketing content generation"""
+    success: bool
+    content: Optional[str] = None
+    outline: Optional[List[str]] = None
+    draft: Optional[str] = None
+    imagePrompt: Optional[str] = None
+    excerpt: Optional[str] = None
+    tags: Optional[List[str]] = None
+    error: Optional[str] = None
+
+
+class AigisMarketingPostRequest(BaseModel):
+    """Request for Aigis Marketing post"""
+    topic: str = Field(..., description="Topic for the post")
+    style: Optional[str] = Field(None, description="Post style")
+
+
+class AigisMarketingSuggestionsRequest(BaseModel):
+    """Request for Aigis Marketing suggestions"""
+    pass  # No fields needed
+
+
+class AigisMarketingSuggestionsResponse(BaseModel):
+    """Response with Aigis Marketing suggestions"""
+    success: bool
+    suggestions: List[str]
+    welcomeMessage: str
+    error: Optional[str] = None
+
+
+# ===== USER AUTH SCHEMAS =====
+class UserSignupRequest(BaseModel):
+    """User signup request"""
+    username: str
+    email: str
+    password: str
+
+
+class UserLoginRequest(BaseModel):
+    """User login request"""
+    email: str
+    password: str
+
+
+class SocialMediaConnectionResponse(BaseModel):
+    """Social media connection response"""
+    platform: str
+    connected: bool
+    username: Optional[str] = None
+
+
+# ===== VIDEO POSTING SCHEMAS =====
+class PostVideoRequest(BaseModel):
+    """Request to post a video"""
+    video_url: str
+    platform: str
+    caption: Optional[str] = None
+
+
+class PostVideoResponse(BaseModel):
+    """Response from video posting"""
+    success: bool
+    post_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class ManualInstagramPostRequest(BaseModel):
+    """Request for manual Instagram post"""
+    image_url: str
+    caption: str
+
+
+class ManualInstagramPostResponse(BaseModel):
+    """Response from manual Instagram post"""
+    success: bool
+    post_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+# ===== IMAGE GENERATION SCHEMAS =====
+class ImageGenerateRequest(BaseModel):
+    """Request to generate an image"""
+    prompt: str = Field(..., description="Text description of the image")
+    model: Optional[str] = Field("nanobanana", description="Model to use")
+    size: Optional[str] = Field("1024x1024", description="Image size")
+    quality: Optional[str] = Field("medium", description="Image quality")
+    style: Optional[str] = Field(None, description="Style preset")
+    n: Optional[int] = Field(1, description="Number of images")
+    aspect_ratio: Optional[str] = Field(None, description="Aspect ratio")
+
+
+class ImageGenerateResponse(BaseModel):
+    """Response from image generation"""
+    image_url: Optional[str] = None
+    image_base64: Optional[str] = None
+    error: Optional[str] = None
+
+
+# ===== VIDEO COMPOSITION SCHEMAS =====
 class SmartVideoCompositionRequest(BaseModel):
-    """Request for smart video composition with images"""
-    video_prompt: str = Field(..., description="Base video description")
-    image_prompts: List[str] = Field(..., description="Prompts for generating supporting images")
-    target_duration: Optional[int] = Field(8, description="Target video duration in seconds")
-    style: Optional[str] = Field("informative", description="Composition style (informative, cinematic, educational, narrative)")
-    use_veo3: Optional[bool] = Field(True, description="Use Veo 3 for video generation (otherwise use Sora)")
+    """Request for smart video composition"""
+    topic: str
+    duration: Optional[int] = Field(8, description="Video duration")
 
 
 class SmartVideoCompositionResponse(BaseModel):
     """Response from smart video composition"""
-    topic: Optional[str] = None
-    image_urls: List[str]
-    image_descriptions: List[str]
-    video_script: str
-    composition_data: Dict
-    video_job_id: Optional[str] = None
-    video_model: str  # "veo-3" or "sora-2"
-    generated_images: List[Dict]
+    success: bool
+    video_url: Optional[str] = None
+    error: Optional[str] = None
 
 
 class InformationalVideoRequest(BaseModel):
-    """Request for creating informational videos - automatically learns from Instagram profile"""
-    username: str = Field(..., description="Instagram username to scrape and learn from")
-    target_duration: Optional[int] = Field(8, description="Target video duration in seconds (4-60 for Veo 3)")
-    document_ids: Optional[List[str]] = Field(default=[], description="Optional document IDs to include as context")
+    """Request for informational video"""
+    topic: str
+    duration: Optional[int] = Field(8, description="Video duration")
 
 
 class InformationalVideoResponse(BaseModel):
-    """Response from informational video generation"""
-    topic: str
-    company_context: str
-    generated_images: List[Dict]
-    image_urls: List[str]
-    image_prompts: List[str]
-    video_script: str
-    video_job_id: Optional[str] = None
-    video_model: str
-    composition_data: Dict
+    """Response from informational video"""
+    success: bool
+    video_url: Optional[str] = None
+    error: Optional[str] = None
 
 
 class DocumentVideoRequest(BaseModel):
-    """Request for creating marketing videos from uploaded documents - AI decides everything if not specified"""
-    document_ids: List[str] = Field(..., description="List of document IDs to use as context", min_length=1)
-    topic: Optional[str] = None  # AI will decide if not provided
-    duration: Optional[int] = None  # AI will decide if not provided
-    target_audience: Optional[str] = None  # AI will decide if not provided
-    key_message: Optional[str] = None  # AI will decide if not provided
-    platform: Optional[str] = "linkedin"  # Default to LinkedIn optimization
-    script: Optional[str] = None  # Pre-approved script from user
-    video_model: Optional[str] = Field("sora-2", description="Video generation model: 'sora-2' or 'veo-3'")
-    approved: Optional[bool] = False  # Whether script is pre-approved
+    """Request for document-based video"""
+    document_id: str
+    duration: Optional[int] = Field(8, description="Video duration")
 
 
 class DocumentVideoResponse(BaseModel):
-    """Response from document-based video generation"""
-    script: str
-    video_job: Optional[Dict] = None  # Sora video job information
-    document_context_summary: Optional[str] = None
-    linkedin_optimization: Optional[str] = Field(None, description="Analysis of LinkedIn performance optimization")
-    key_insights: Optional[str] = Field(None, description="Key insights extracted from documents")
-    document_analysis: Optional[str] = Field(None, description="Full document analysis")
-    ai_decisions: Optional[Dict] = Field(None, description="AI decisions (topic, duration, audience, message)")
-    video_options: Optional[List[Dict]] = Field(None, description="Multiple video options for user to choose from")
+    """Response from document-based video"""
+    success: bool
+    video_url: Optional[str] = None
+    error: Optional[str] = None
 
 
+# ===== VIDEO OPTIONS SCHEMAS =====
 class VideoOptionsRequest(BaseModel):
-    video_model: Optional[str] = Field("sora-2", description="Video generation model: 'sora-2' or 'veo-3'")
-    """Request to generate video options from documents"""
-    document_ids: List[str] = Field(..., description="List of document IDs to analyze")
-    num_options: Optional[int] = Field(3, description="Number of video options to generate (default: 3)")
+    """Request for video options"""
+    topic: str
+    duration: Optional[int] = Field(8, description="Video duration")
 
 
 class VideoOptionsResponse(BaseModel):
-    """Response with multiple video options"""
-    options: List[Dict] = Field(..., description="List of video options with different approaches")
+    """Response with video options"""
+    options: List[str]
+    error: Optional[str] = None
 
 
 class ScriptApprovalRequest(BaseModel):
-    """Request to approve or edit a script"""
-    script: str = Field(..., description="The script (original or edited)")
-    approved: bool = Field(..., description="Whether the script is approved")
-    original_script: Optional[str] = Field(None, description="Original script if editing")
+    """Request for script approval"""
+    script: str
+    approved: bool
 
 
-# ===== USER CONTEXT & PREFERENCES SCHEMAS =====
+# ===== USER PREFERENCES SCHEMAS =====
 class UserPreferencesRequest(BaseModel):
     """Request to update user preferences"""
-    brand_voice: Optional[str] = Field(None, description="Brand voice description (e.g., 'professional but friendly', 'authoritative', 'conversational')")
-    content_style: Optional[str] = Field(None, description="Content style preference (e.g., 'educational', 'entertaining', 'inspirational')")
-    target_audience: Optional[str] = Field(None, description="Primary target audience")
-    preferred_video_length: Optional[int] = Field(None, description="Preferred video length in seconds")
-    video_model_preference: Optional[str] = Field(None, description="Preferred video model: 'sora-2' or 'veo-3'")
-    platform_preferences: Optional[Dict[str, bool]] = Field(None, description="Platform preferences (e.g., {'linkedin': True, 'instagram': False})")
-    content_themes: Optional[List[str]] = Field(None, description="Preferred content themes")
-    brand_colors: Optional[List[str]] = Field(None, description="Brand color palette")
-    tone_preferences: Optional[List[str]] = Field(None, description="Tone preferences (e.g., ['professional', 'authentic', 'engaging'])")
+    preferences: Dict
 
 
 class UserPreferencesResponse(BaseModel):
     """Response with user preferences"""
     preferences: Dict
-    message: str
+    error: Optional[str] = None
 
 
 class UserContextResponse(BaseModel):
-    """Response with comprehensive user context"""
-    user_id: str
-    preferences: Dict
-    content_history: Dict
-    behavioral_patterns: Dict
-    brand_insights: Dict
-    performance_data: Dict
-    social_profiles: Dict
-    document_insights: Dict
-    metadata: Dict
+    """Response with user context"""
+    context: str
+    error: Optional[str] = None
+
+
+# ===== COMPETITOR ANALYSIS SCHEMAS =====
+class FindCompetitorsRequest(BaseModel):
+    """Request to find competitors"""
+    document_id: str
+
+
+# ===== INTEGRATION SCHEMAS =====
+class IntegrationConnectionResponse(BaseModel):
+    """Integration connection response"""
+    id: int
+    platform: str
+    platform_user_email: Optional[str] = None
+    is_active: bool
+    connected_at: str
+
+
+class NotionPageResponse(BaseModel):
+    """Notion page response"""
+    id: str
+    title: str
+    url: str
+
+
+class GoogleDriveFileResponse(BaseModel):
+    """Google Drive file response"""
+    id: str
+    name: str
+    mimeType: str
+    webViewLink: Optional[str] = None
+
+
+class JiraIssueResponse(BaseModel):
+    """Jira issue response"""
+    id: str
+    key: str
+    summary: str
+    status: str
+
+
+class ImportContentRequest(BaseModel):
+    """Request to import content"""
+    source: str
+    content_id: str
+
+
+# ===== SORA VIDEO JOB SCHEMA =====
+class SoraVideoJob(BaseModel):
+    """Sora video generation job status"""
+    job_id: str
+    status: str
+    progress: Optional[int] = None
+    model: str
+    video_url: Optional[str] = None
+    created_at: int
+
+
+# ===== SEO/AEO (Answer Engine Optimization) SCHEMAS =====
+class SEOAEOAnalysisRequest(BaseModel):
+    """Request to start SEO/AEO analysis"""
+    brand_name: str = Field(..., description="Brand name to track")
+    brand_url: Optional[str] = Field(None, description="Brand website URL (optional)")
+    competitors: Optional[List[str]] = Field(None, description="List of competitor names")
+    topics: Optional[List[str]] = Field(None, description="Optional list of topics to analyze")
+    num_prompts: Optional[int] = Field(100, description="Number of prompts to test (default: 100)")
+
+
+class SourceCitation(BaseModel):
+    """Source citation from LLM response"""
+    domain: str
+    url: str
+    title: Optional[str] = None
+    snippet: Optional[str] = None
+
+
+class PromptResult(BaseModel):
+    """Result from testing a prompt"""
+    prompt: str
+    topic: str
+    brand_mentioned: bool
+    response: str
+    sources: List[SourceCitation]
+    competitors_mentioned: List[str]
+    created_at: str
+
+
+class TopicMentionStats(BaseModel):
+    """Brand mention statistics by topic"""
+    topic: str
+    mention_rate: float
+    total_prompts: int
+    mentions: int
+
+
+class CompetitorStats(BaseModel):
+    """Competitor mention statistics"""
+    competitor: str
+    mention_rate: float
+    total_prompts: int
+    mentions: int
+
+
+class SourceStats(BaseModel):
+    """Source citation statistics"""
+    domain: str
+    mention_count: int
+    source_type: Optional[str] = None  # e.g., "Website", "Community", "Code Repository"
+
+
+class SEOAEOAnalysisResponse(BaseModel):
+    """Response from SEO/AEO analysis"""
+    success: bool
+    analysis_id: Optional[str] = None
+    brand_name: str
+    brand_mention_rate: float
+    total_prompts_tested: int
+    total_mentions: int
+    top_competitor: Optional[str] = None
+    top_competitor_rate: Optional[float] = None
+    total_sources: int
+    topics: List[TopicMentionStats]
+    competitors: List[CompetitorStats]
+    top_sources: List[SourceStats]
+    recent_results: List[PromptResult]
+    error: Optional[str] = None
+
+
+class SEOAEOSummary(BaseModel):
+    """Summary of SEO/AEO analysis"""
+    brand_mention_rate: float
+    total_prompts_tested: int
+    total_mentions: int
+    top_competitor: Optional[str] = None
+    top_competitor_rate: Optional[float] = None
+    total_sources: int
+
+
+class SEOAEOStatusRequest(BaseModel):
+    """Request to check analysis status"""
+    analysis_id: str
+
+
+class SEOAEOStatusResponse(BaseModel):
+    """Response with analysis status"""
+    analysis_id: str
+    status: str  # "running", "completed", "failed"
+    progress: Optional[int] = None
+    results: Optional[SEOAEOSummary] = None
+    error: Optional[str] = None

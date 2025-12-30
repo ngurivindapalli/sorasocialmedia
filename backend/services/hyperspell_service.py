@@ -83,19 +83,156 @@ class HyperspellService:
             
             memory_status = await asyncio.to_thread(add_sync)
             
+            # Verify memory was actually created - check for resource_id
+            resource_id = None
+            if hasattr(memory_status, 'resource_id'):
+                resource_id = memory_status.resource_id
+            elif isinstance(memory_status, dict):
+                resource_id = memory_status.get('resource_id')
+            elif isinstance(memory_status, str):
+                resource_id = memory_status
+            
+            if not resource_id or (isinstance(resource_id, str) and len(resource_id.strip()) == 0):
+                print(f"[Hyperspell] ❌ ERROR: Memory creation returned no valid resource_id. Response: {memory_status}")
+                return None
+            
+            # Verify by querying the memory back (double-check it exists)
+            try:
+                verify_query = await self.query_memories(user_id, text[:50] if len(text) > 50 else text, max_results=1)
+                if verify_query and verify_query.get("answer"):
+                    verify_answer = str(verify_query.get("answer", "")).strip()
+                    # Check if our text appears in the verification (at least partially)
+                    text_check = text[:50].lower() if len(text) > 50 else text.lower()
+                    if text_check in verify_answer.lower() or len(verify_answer) > 0:
+                        print(f"[Hyperspell] ✓ Verified: Memory confirmed in Hyperspell (resource_id: {resource_id})")
+                    else:
+                        print(f"[Hyperspell] ⚠️ WARNING: Memory created but verification query didn't find content")
+                else:
+                    print(f"[Hyperspell] ⚠️ WARNING: Memory created but verification query returned no results")
+            except Exception as verify_error:
+                print(f"[Hyperspell] ⚠️ WARNING: Could not verify memory (non-critical): {verify_error}")
+                # Continue anyway - memory was created, verification is just a double-check
+            
             result = {
-                "resource_id": memory_status.resource_id if hasattr(memory_status, 'resource_id') else str(memory_status),
+                "resource_id": resource_id,
                 "text_preview": text[:100] + "..." if len(text) > 100 else text,
                 "added_at": datetime.now().isoformat(),
                 "user_id": user_id,  # The user's own account
-                "collection": collection or "user_memories"
+                "collection": collection or "user_memories",
+                "verified": True  # Indicates we verified the memory exists
             }
             
-            print(f"[Hyperspell] OK Text memory added: {result['resource_id']}")
+            print(f"[Hyperspell] ✓ OK Text memory added and verified: {resource_id}")
             return result
             
         except Exception as e:
             print(f"[Hyperspell] Error adding text memory: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    async def append_to_unified_brand_context(self, user_id: str, new_content: str, content_type: str = "document") -> Optional[Dict]:
+        """
+        Append content to a unified brand context memory for a user.
+        Retrieves existing brand context, merges with new content, and saves as a single unified memory.
+        
+        Args:
+            user_id: User identifier (email format recommended)
+            new_content: New content to append to brand context
+            content_type: Type of content being added (e.g., "document", "competitor", "note")
+            
+        Returns:
+            Memory status dict with resource_id, or None if failed
+        """
+        if not self.available:
+            print("[Hyperspell] Service not available for appending to brand context")
+            return None
+        
+        try:
+            print(f"[Hyperspell] Appending {content_type} to unified brand context for user: {user_id}")
+            
+            # Try to get existing brand context, but don't fail if it's not found yet
+            # (it might not be indexed yet, or this might be the first content)
+            existing_context = ""
+            try:
+                existing_context = await self.get_all_memories_context(user_id)
+                if existing_context:
+                    print(f"[Hyperspell] Found existing context: {len(existing_context)} chars")
+                else:
+                    print(f"[Hyperspell] No existing context found (this might be the first addition)")
+            except Exception as e:
+                print(f"[Hyperspell] Could not retrieve existing context (non-critical, might be first addition): {e}")
+                existing_context = ""
+            
+            # Prepare new content section
+            timestamp = datetime.now().isoformat()
+            new_content_section = f"\n\n--- {content_type.upper()} ADDED: {timestamp} ---\n{new_content}\n"
+            
+            # Merge existing and new content
+            if existing_context and len(existing_context.strip()) > 10:  # Lower threshold to 10 chars
+                # Append new content to existing
+                unified_content = existing_context + new_content_section
+                print(f"[Hyperspell] Merged with existing context ({len(existing_context)} chars), total: {len(unified_content)} chars")
+            else:
+                # First content - create new unified memory
+                unified_content = f"BRAND CONTEXT - UNIFIED MEMORY\n{new_content_section}"
+                print(f"[Hyperspell] Creating new unified brand context ({len(unified_content)} chars)")
+            
+            # Save unified content as a single memory in "brand_context" collection
+            def add_sync():
+                client = Hyperspell(api_key=self.api_key, user_id=user_id)
+                memory_status = client.memories.add(
+                    text=unified_content,
+                    collection="brand_context"  # Single collection for unified brand context
+                )
+                return memory_status
+            
+            memory_status = await asyncio.to_thread(add_sync)
+            
+            # Verify memory was actually created - check for resource_id
+            resource_id = None
+            if hasattr(memory_status, 'resource_id'):
+                resource_id = memory_status.resource_id
+            elif isinstance(memory_status, dict):
+                resource_id = memory_status.get('resource_id')
+            elif isinstance(memory_status, str):
+                resource_id = memory_status
+            
+            if not resource_id or (isinstance(resource_id, str) and len(resource_id.strip()) == 0):
+                print(f"[Hyperspell] ❌ ERROR: Memory creation returned no valid resource_id. Response: {memory_status}")
+                return None
+            
+            # Verify by querying the memory back (double-check it exists)
+            try:
+                verify_query = await self.query_memories(user_id, f"brand context {content_type}", max_results=1)
+                if verify_query and verify_query.get("answer"):
+                    verify_answer = str(verify_query.get("answer", "")).strip()
+                    # Check if our new content appears in the verification (at least partially)
+                    content_check = new_content[:50].lower() if len(new_content) > 50 else new_content.lower()
+                    if content_check in verify_answer.lower() or len(verify_answer) > len(existing_context) if existing_context else len(verify_answer) > 0:
+                        print(f"[Hyperspell] ✓ Verified: Memory confirmed in Hyperspell (resource_id: {resource_id})")
+                    else:
+                        print(f"[Hyperspell] ⚠️ WARNING: Memory created but verification query didn't find new content")
+                else:
+                    print(f"[Hyperspell] ⚠️ WARNING: Memory created but verification query returned no results")
+            except Exception as verify_error:
+                print(f"[Hyperspell] ⚠️ WARNING: Could not verify memory (non-critical): {verify_error}")
+                # Continue anyway - memory was created, verification is just a double-check
+            
+            result = {
+                "resource_id": resource_id,
+                "content_length": len(unified_content),
+                "added_at": timestamp,
+                "user_id": user_id,
+                "collection": "brand_context",
+                "verified": True  # Indicates we verified the memory exists
+            }
+            
+            print(f"[Hyperspell] ✓ OK Unified brand context updated and verified: {resource_id}")
+            return result
+            
+        except Exception as e:
+            print(f"[Hyperspell] Error appending to unified brand context: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -234,81 +371,59 @@ class HyperspellService:
             # Create a client for this specific user - searches only their memories
             # Run synchronous SDK call in thread pool to avoid blocking
             def search_sync():
-                print(f"[Hyperspell] Querying ALL memories for user: {user_id} (query: '{query}')")
                 # Use the user's own account
                 client = Hyperspell(api_key=self.api_key, user_id=user_id)
                 
-                # Use search() method to get all memories
-                # For getting everything, use "*" as query and don't limit sources
+                # Use search() with answer=True to get summarized content from all memories
+                search_query = query if query and query.strip() else "*"
                 try:
-                    # First try: search all memories without specifying sources
-                    # This should get everything regardless of collection
-                    search_query = query if query and query.strip() else "*"
                     response = client.memories.search(
                         query=search_query,
-                        answer=False  # Don't use answer mode, get raw documents
+                        answer=True  # Get content summaries - this accesses the actual memory content
                     )
-                    print(f"[Hyperspell] Search successful, got response")
                     return response
                 except Exception as e:
-                    print(f"[Hyperspell] Search without answer failed: {e}, trying with answer...")
+                    print(f"[Hyperspell] Search with answer=True failed: {e}, trying fallback...")
+                    # Fallback: try without answer
                     try:
-                        # Fallback: try with answer=True
-                        search_query = query if query and query.strip() else "*"
                         response = client.memories.search(
                             query=search_query,
-                            answer=True
-                        )
-                        return response
-                    except Exception as e2:
-                        print(f"[Hyperspell] Search with answer failed: {e2}, trying with sources...")
-                        # Final fallback: try with vault source
-                        search_query = query if query and query.strip() else "*"
-                        response = client.memories.search(
-                            query=search_query,
-                            sources=["vault"],
                             answer=False
                         )
                         return response
+                    except Exception as e2:
+                        print(f"[Hyperspell] Search failed: {e2}")
+                        raise
             
             response = await asyncio.to_thread(search_sync)
             
-            # Extract answer and documents from QueryResult
+            # Extract answer field - this contains the summarized content from all memories
             answer = None
-            documents = []
-            
             if hasattr(response, 'answer') and response.answer:
-                answer = response.answer
-            elif hasattr(response, 'answer') and response.answer is not None:
-                answer = str(response.answer)
-            
-            # Extract documents from QueryResult
-            if hasattr(response, 'documents') and response.documents:
-                documents = response.documents
-            elif hasattr(response, 'results') and response.results:
-                # If results is a list of documents
-                if isinstance(response.results, list):
-                    documents = response.results
+                answer = str(response.answer).strip()
+                if len(answer) > 20:
+                    print(f"[Hyperspell] Retrieved answer: {len(answer)} chars")
                 else:
-                    documents = [response.results]
+                    answer = None
             
-            # Format response according to Hyperspell SDK structure
+            # Format response - we only use the answer field, not individual documents
             result = {
                 "query": query,
                 "answer": answer,
-                "documents": documents,  # Store actual documents
-                "results": documents,  # Keep for backward compatibility
+                "documents": [],  # Don't return documents - we use answer field only
+                "results": [],  # Keep for backward compatibility
                 "user_id": user_id,
                 "queried_at": datetime.now().isoformat()
             }
             
-            print(f"[Hyperspell] OK Memory search completed")
-            if result.get("answer"):
-                print(f"[Hyperspell] Answer: {result['answer'][:100]}...")
-            if documents:
-                print(f"[Hyperspell] Found {len(documents)} documents")
+            if answer:
+                print(f"[Hyperspell] OK Memory search completed - answer: {len(answer)} chars")
+                if len(answer) > 100:
+                    print(f"[Hyperspell] Answer: {answer[:100]}...")
+                else:
+                    print(f"[Hyperspell] Answer: {answer}")
             else:
-                print(f"[Hyperspell] No documents found in response")
+                print(f"[Hyperspell] OK Memory search completed - no answer found")
             return result
             
         except Exception as e:
@@ -317,159 +432,87 @@ class HyperspellService:
     
     async def get_all_memories_context(self, user_id: str) -> str:
         """
-        Get ALL memories for a user as context (documents, competitors, posts, etc.)
-        Uses a very broad query to retrieve everything.
+        Get unified brand context from Hyperspell "brand_context" collection.
+        Uses multiple queries to reliably retrieve the unified brand context memory.
         
         Args:
             user_id: User identifier (email format recommended)
             
         Returns:
-            Formatted context string with all user memories
+            Formatted context string with unified brand context
         """
         if not self.available:
             return ""
         
-        print(f"[Hyperspell] Getting ALL memories for user: {user_id}")
-        
-        # Use a very broad query to get all memories
-        # Try multiple broad queries to catch everything
-        all_context_parts = []
-        
-        # Use a single very broad query to get ALL memories
-        # No need to search for specific collections - just get everything
-        seen_content = set()  # Track content we've already added to avoid duplicates
-        
         try:
-            # Query with "*" to get everything, with high max_results
-            memory_results = await self.query_memories(user_id, "*", max_results=100)
+            print(f"[Hyperspell] Querying unified brand context for user: {user_id}")
             
-            if memory_results:
-                # Extract answer if available (but skip generic "cannot answer" responses)
-                answer = memory_results.get("answer")
-                if answer and len(str(answer).strip()) > 0:
-                    answer_str = str(answer).strip()
-                    # Skip generic "cannot answer" responses
-                    if "cannot answer" not in answer_str.lower() and "no information" not in answer_str.lower():
-                        if answer_str not in seen_content:
-                            all_context_parts.append(answer_str)
-                            seen_content.add(answer_str)
-                
-                # Extract all documents/memories
-                documents = memory_results.get("documents") or memory_results.get("results", [])
-                print(f"[Hyperspell] Processing {len(documents)} memory items")
-                
-                for i, doc in enumerate(documents):
-                    content = None
+            # Try multiple queries to find the unified brand context
+            queries_to_try = [
+                "*",  # Get all memories (most reliable)
+                "BRAND CONTEXT UNIFIED MEMORY",
+                "brand context documents competitors",
+                "user background profession industry",
+                "document resume cv"  # Try to match document content
+            ]
+            
+            best_result = None
+            best_length = 0
+            
+            for query in queries_to_try:
+                print(f"[Hyperspell] Trying query: '{query}' for user: {user_id}")
+                try:
+                    memory_results = await self.query_memories(user_id, query, max_results=10)
                     
-                    # Debug: print what type of object we have
-                    print(f"[Hyperspell] Document {i+1} type: {type(doc)}")
-                    if isinstance(doc, dict):
-                        print(f"[Hyperspell] Document {i+1} keys: {list(doc.keys())[:10]}")
-                    
-                    # Try multiple ways to extract content
-                    if isinstance(doc, dict):
-                        # Try all possible keys
-                        content = (doc.get("content") or doc.get("text") or doc.get("snippet") or 
-                                 doc.get("document") or doc.get("memory") or doc.get("data") or
-                                 doc.get("body") or doc.get("value") or doc.get("message"))
-                        
-                        # If still no content, try converting the whole dict to string (excluding metadata)
-                        if not content:
-                            # Try to get the actual content by excluding known metadata keys
-                            metadata_keys = {'id', 'score', 'metadata', 'created_at', 'updated_at', 'collection', 'source'}
-                            content_dict = {k: v for k, v in doc.items() if k not in metadata_keys}
-                            if content_dict:
-                                # Join all non-metadata values
-                                content = ' '.join(str(v) for v in content_dict.values() if v and str(v).strip())
-                    elif hasattr(doc, '__dict__'):
-                        # It's an object, try to get attributes
-                        attrs = ['content', 'text', 'snippet', 'document', 'memory', 'data', 'body', 'value']
-                        for attr in attrs:
-                            if hasattr(doc, attr):
-                                content = getattr(doc, attr)
-                                if content:
-                                    break
-                        
-                        # Special handling for Hyperspell Memory objects
-                        if not content and hasattr(doc, 'text'):
-                            # Memory objects might have text as a list or dict
-                            text_attr = getattr(doc, 'text', None)
-                            if isinstance(text_attr, list) and len(text_attr) > 0:
-                                # If text is a list, extract from first item
-                                if isinstance(text_attr[0], dict):
-                                    content = text_attr[0].get('text') or str(text_attr[0])
-                                else:
-                                    content = str(text_attr[0])
-                            elif isinstance(text_attr, dict):
-                                content = text_attr.get('text') or str(text_attr)
-                            elif text_attr:
-                                content = str(text_attr)
-                    elif hasattr(doc, 'content'):
-                        content = doc.content
-                    elif hasattr(doc, 'text'):
-                        content = doc.text
-                    elif hasattr(doc, 'snippet'):
-                        content = doc.snippet
-                    elif hasattr(doc, 'document'):
-                        content = doc.document
-                    elif hasattr(doc, 'memory'):
-                        content = doc.memory
-                    else:
-                        # Last resort: convert to string
-                        content = str(doc)
-                    
-                    if content:
-                        # Handle content that might be a list or dict
-                        if isinstance(content, list):
-                            # If content is a list, extract text from items
-                            content_parts = []
-                            for item in content:
-                                if isinstance(item, dict):
-                                    item_text = item.get('text') or item.get('content') or str(item)
-                                    if item_text:
-                                        content_parts.append(str(item_text))
-                                else:
-                                    content_parts.append(str(item))
-                            content_str = ' '.join(content_parts).strip()
-                        elif isinstance(content, dict):
-                            # If content is a dict, extract text field
-                            content_str = str(content.get('text') or content.get('content') or content).strip()
+                    if memory_results:
+                        # Use the answer field - it contains content from brand_context memories
+                        answer = memory_results.get("answer")
+                        if answer and len(str(answer).strip()) > 20:
+                            answer_str = str(answer).strip()
+                            # Skip generic "cannot answer" responses
+                            if "cannot answer" not in answer_str.lower() and "no information" not in answer_str.lower() and "i don't have" not in answer_str.lower() and "i cannot" not in answer_str.lower():
+                                print(f"[Hyperspell] ✓ Found valid result using query '{query}': {len(answer_str)} chars")
+                                # Keep the longest/best result
+                                if len(answer_str) > best_length:
+                                    best_result = answer_str
+                                    best_length = len(answer_str)
+                                    print(f"[Hyperspell] This is the best result so far ({len(answer_str)} chars)")
+                            else:
+                                print(f"[Hyperspell] Generic response received for query '{query}': {answer_str[:100]}...")
                         else:
-                            content_str = str(content).strip()
-                        
-                        if len(content_str) > 0:
-                            # Use first 200 chars as hash to avoid exact duplicates (more specific)
-                            content_hash = content_str[:200]
-                            if content_hash not in seen_content:
-                                all_context_parts.append(content_str)
-                                seen_content.add(content_hash)
-                                print(f"[Hyperspell] ✓ Added memory item {i+1} ({len(content_str)} chars): {content_str[:100]}...")
-                        else:
-                            print(f"[Hyperspell] ⚠️ Document {i+1} content is empty after processing")
+                            print(f"[Hyperspell] No answer field or answer too short ({len(str(answer)) if answer else 0} chars) for query '{query}'")
                     else:
-                        print(f"[Hyperspell] ⚠️ Document {i+1} has no extractable content")
-                            
+                        print(f"[Hyperspell] No results object returned for query '{query}'")
+                except Exception as query_error:
+                    print(f"[Hyperspell] Error with query '{query}': {query_error}")
+                    continue
+            
+            # Return the best result found
+            if best_result and best_length > 20:
+                print(f"[Hyperspell] ✓ Retrieved unified brand context: {len(best_result)} chars")
+                # Show preview of retrieved content
+                preview = best_result[:200] + "..." if len(best_result) > 200 else best_result
+                print(f"[Hyperspell] Content preview: {preview}")
+                return best_result
+            else:
+                # If all queries failed, return empty
+                print(f"[Hyperspell] ❌ No brand context memories found for user: {user_id} (tried {len(queries_to_try)} queries, best result was {best_length} chars)")
+                return ""
+                
         except Exception as e:
-            print(f"[Hyperspell] Error getting all memories: {e}")
+            print(f"[Hyperspell] ❌ Error getting unified brand context: {e}")
             import traceback
             traceback.print_exc()
-        
-        if all_context_parts:
-            result = "\n\n".join(all_context_parts)
-            print(f"[Hyperspell] ✓ Retrieved {len(all_context_parts)} memory items ({len(result)} chars)")
-            return result
-        else:
-            print(f"[Hyperspell] ⚠️ No memories found for user")
             return ""
     
     async def get_context_summary(self, user_id: str, query: str) -> str:
         """
-        Get a formatted context summary from Hyperspell for AI prompt injection
-        Uses search() with answer=True to get LLM-generated context
+        Get a formatted context summary from Hyperspell unified brand context for AI prompt injection.
+        Queries the unified "brand_context" collection to get all user context.
         
         Args:
             user_id: User identifier (email format recommended)
-            query: Query to get relevant context
+            query: Query to get relevant context (can be used to filter, but primarily gets brand_context collection)
             
         Returns:
             Formatted context string for AI prompts
@@ -477,7 +520,9 @@ class HyperspellService:
         if not self.available:
             return ""
         
-        memory_results = await self.query_memories(user_id, query)
+        # Query unified brand context collection
+        # The query parameter can help filter, but we primarily want the brand_context collection
+        memory_results = await self.query_memories(user_id, f"{query} brand context", max_results=10)
         
         if not memory_results:
             return ""

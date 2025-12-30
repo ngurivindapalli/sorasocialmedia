@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Image, Download, Copy, FileText, Loader2, CheckCircle2, XCircle, Hash, LogIn, UserPlus, LogOut, Lightbulb, X, Info } from 'lucide-react'
-import { api } from '../utils/api'
+import { api, API_URL } from '../utils/api'
 import { authUtils } from '../utils/auth'
 
 function MarketingPost() {
@@ -156,7 +156,7 @@ function MarketingPost() {
     }
   }
 
-  const handleDownloadImage = () => {
+  const handleDownloadImage = async () => {
     if (result?.image_base64) {
       // Convert base64 to blob and download
       const byteCharacters = atob(result.image_base64)
@@ -175,13 +175,36 @@ function MarketingPost() {
       document.body.removeChild(link)
       URL.revokeObjectURL(url)
     } else if (result?.image_url) {
-      // Download from URL
-      const link = document.createElement('a')
-      link.href = result.image_url
-      link.download = `marketing-post-${Date.now()}.png`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
+      // Download from URL - handle both static files and API URLs
+      const imageUrl = result.image_url.startsWith('/static-posts/') 
+        ? result.image_url  // Static file, use as-is
+        : result.image_url.startsWith('http')
+          ? result.image_url  // Full URL
+          : `${API_URL}${result.image_url}`  // API endpoint
+      
+      try {
+        // Fetch the image and create a blob for download
+        const response = await fetch(imageUrl)
+        const blob = await response.blob()
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `marketing-post-${Date.now()}.png`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+      } catch (error) {
+        console.error('Error downloading image:', error)
+        // Fallback: try direct link
+        const link = document.createElement('a')
+        link.href = imageUrl
+        link.download = `marketing-post-${Date.now()}.png`
+        link.target = '_blank'
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+      }
     }
   }
 
@@ -450,7 +473,15 @@ function MarketingPost() {
                   <div className="bg-[#f5f5f5] border border-[#e5e7eb] rounded-lg overflow-hidden aspect-square flex items-center justify-center">
                     {result.image_url || result.image_base64 ? (
                       <img
-                        src={result.image_url || `data:image/png;base64,${result.image_base64}`}
+                        src={
+                          result.image_base64 
+                            ? `data:image/png;base64,${result.image_base64}`
+                            : result.image_url?.startsWith('http') 
+                              ? result.image_url 
+                              : result.image_url?.startsWith('/static-posts/')
+                                ? result.image_url  // Static files served from frontend, no API_URL needed
+                                : `${API_URL}${result.image_url}`
+                        }
                         alt="Generated marketing post"
                         className="w-full h-full object-cover"
                       />

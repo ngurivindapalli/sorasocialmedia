@@ -506,8 +506,7 @@ class Veo3Service:
                 "duration": f"{duration}s"
             }
             
-            # Storage URI is optional for base video generation
-            # Only required for video extensions (which are disabled for now)
+            # Storage URI is required for all Veo video generation (videos stored in GCS)
             # Format: gs://bucket-name/path/to/videos/
             storage_uri = os.getenv('VEO3_STORAGE_URI', '')
             # Remove old project references (igvideogen)
@@ -516,12 +515,19 @@ class Veo3Service:
                 storage_uri = ''
             
             if storage_uri:
-                # Only include storage URI if explicitly set and valid
+                # Include storage URI - videos will be stored in GCS
                 parameters["storageUri"] = storage_uri
                 print(f"[Veo3] Using storage URI: {storage_uri}")
             else:
-                # Base video generation works without storage URI
-                print(f"[Veo3] No storage URI set - using base video generation (extensions disabled)")
+                # Try to construct default bucket if project_id is available
+                if self.project_id:
+                    default_bucket = f"{self.project_id}-veo3-videos"
+                    storage_uri = f"gs://{default_bucket}/videos/"
+                    parameters["storageUri"] = storage_uri
+                    print(f"[Veo3] WARNING VEO3_STORAGE_URI not set. Using default: {storage_uri}")
+                    print(f"[Veo3] To avoid this warning, set VEO3_STORAGE_URI in your .env file")
+                else:
+                    print(f"[Veo3] WARNING No storage URI set and no project ID - videos may not be stored properly")
             
             payload = {
                 "instances": instances,
@@ -530,15 +536,30 @@ class Veo3Service:
             
             # Make the API request
             # Try different model ID variations since Veo might have different naming
-            # IMPORTANT: Use veo-3.1-generate (not fast-generate) to enable video extensions
-            possible_model_ids = [
-                self.model_id,  # Try configured model ID first
-                "veo-3.1-generate-preview",  # Veo 3.1 Preview (supports extensions)
-                "veo-3.1-generate-001",      # Veo 3.1 model ID (supports extensions)
-                "veo-3-generate-001",        # Alternative format
-                "veo-3.0-generate-001",      # Veo 3.0 model ID
-                "veo-3",                     # Original format
-            ]
+            # NOTE: veo-3.1-generate-preview requires storage URI, so we'll try models that don't require it first
+            # If extensions are needed, we'll use veo-3.1-generate-preview with storage URI
+            storage_uri_set = bool(storage_uri)
+            possible_model_ids = []
+            
+            if storage_uri_set:
+                # If storage URI is set, we can use veo-3.1-generate-preview (supports extensions)
+                possible_model_ids = [
+                    self.model_id,  # Try configured model ID first
+                    "veo-3.1-generate-preview",  # Veo 3.1 Preview (supports extensions, requires storage URI)
+                    "veo-3.1-generate-001",      # Veo 3.1 model ID (supports extensions, requires storage URI)
+                    "veo-3-generate-001",        # Alternative format
+                    "veo-3.0-generate-001",      # Veo 3.0 model ID
+                    "veo-3",                     # Original format
+                ]
+            else:
+                # If no storage URI, try models that don't require it first
+                possible_model_ids = [
+                    self.model_id,  # Try configured model ID first
+                    "veo-3.0-generate-001",      # Veo 3.0 model ID (may not require storage URI)
+                    "veo-3-generate-001",        # Alternative format
+                    "veo-3",                     # Original format
+                    # Don't try veo-3.1-generate-preview without storage URI - it requires it
+                ]
             
             last_error = None
             working_model_id = None
@@ -574,12 +595,29 @@ class Veo3Service:
                         break
                     except httpx.HTTPStatusError as e:
                         last_error = e
+                        error_text = e.response.text[:500] if e.response.text else str(e)
+                        
+                        # Check if it's a storage bucket error
+                        if "bucket" in error_text.lower() and "not found" in error_text.lower():
+                            # Storage bucket error - this model requires storage URI but bucket doesn't exist
+                            print(f"[Veo3]   Model '{model_id_attempt}' requires storage URI but bucket not found")
+                            if not storage_uri_set and model_id_attempt.startswith("veo-3.1"):
+                                # Skip veo-3.1 models if storage URI not set
+                                print(f"[Veo3]   Skipping {model_id_attempt} (requires storage URI)")
+                                continue
+                            else:
+                                # Storage URI was set but bucket doesn't exist - provide helpful error
+                                print(f"[Veo3]   Storage URI set but bucket not found: {error_text}")
+                                # Try next model
+                                continue
+                        
                         if e.response.status_code == 404:
                             # Try next model ID
                             print(f"[Veo3]   Model ID '{model_id_attempt}' not found, trying next...")
                             continue
                         else:
-                            # Different error, raise it
+                            # Different error, raise it (but log first)
+                            print(f"[Veo3]   Error with model '{model_id_attempt}': {error_text}")
                             raise
             
             if not working_model_id:
@@ -1143,16 +1181,32 @@ class Veo3Service:
             
             # Read video file and convert to base64
             import httpx
+            video_bytes = None
+            
             async with httpx.AsyncClient(timeout=30.0) as client:
                 if video_url.startswith('http'):
-                    # Download video
+                    # Download video from HTTP/HTTPS URL
                     video_response = await client.get(video_url)
                     video_response.raise_for_status()
                     video_bytes = video_response.content
-                else:
+                elif video_url.startswith('/api/'):
+                    # API endpoint - construct full URL
+                    # Get the base API URL from environment or use localhost
+                    api_base_url = os.getenv('API_BASE_URL', 'http://localhost:8000')
+                    full_url = f"{api_base_url}{video_url}"
+                    print(f"[Veo3] Downloading video from API endpoint: {full_url}")
+                    video_response = await client.get(full_url)
+                    video_response.raise_for_status()
+                    video_bytes = video_response.content
+                elif os.path.exists(video_url):
                     # Local file path
                     with open(video_url, 'rb') as f:
                         video_bytes = f.read()
+                else:
+                    raise Exception(f"Video URL is neither a valid HTTP URL, API endpoint, nor local file path: {video_url}")
+            
+            if not video_bytes:
+                raise Exception("Failed to retrieve video bytes")
             
             video_base64 = base64.b64encode(video_bytes).decode('utf-8')
             
@@ -1204,16 +1258,15 @@ class Veo3Service:
                     # CRITICAL: Storage URI is REQUIRED for extended videos
                     storage_uri = os.getenv('VEO3_STORAGE_URI', '')
                     if not storage_uri:
-                        # Try to construct a default bucket URI if project_id is available
-                        if self.project_id:
-                            default_bucket = f"{self.project_id}-veo3-videos"
-                            storage_uri = f"gs://{default_bucket}/videos/"
-                            print(f"[Veo3] WARNING VEO3_STORAGE_URI not set. Using default: {storage_uri}")
-                        else:
-                            raise Exception(
-                                "VEO3_STORAGE_URI is required for Veo 3 video extension. "
-                                "Set it in your .env file as: VEO3_STORAGE_URI=gs://your-bucket-name/videos/"
-                            )
+                        # Don't use a default bucket that doesn't exist - require explicit configuration
+                        raise Exception(
+                            "VEO3_STORAGE_URI is required for Veo 3 video extension. "
+                            "Set it in your .env file as: VEO3_STORAGE_URI=gs://your-bucket-name/videos/\n\n"
+                            "To create a bucket:\n"
+                            "1. Run: gsutil mb gs://your-project-id-veo3-videos\n"
+                            "2. Add to .env: VEO3_STORAGE_URI=gs://your-project-id-veo3-videos/videos/\n"
+                            "3. Make sure your service account has 'Storage Object Admin' role"
+                        )
                     
                     parameters["storageUri"] = storage_uri
                     print(f"[Veo3] Using storage URI for extension: {storage_uri}")
@@ -1378,101 +1431,60 @@ class Veo3Service:
                 print(f"[Veo3] OK Video uploaded to Gemini API: {uploaded_file.name}")
                 
                 # Step 4: Extend the video using generate_videos with source parameter
-                # CRITICAL: Use 'source' parameter, not 'video' parameter (docs are wrong!)
-                # Based on user's working code: source=base_video where base_video is from generated_videos[0]
-                # But we have a File object from upload. Need to check GenerateVideosSource structure
-                print(f"[Veo3] Step 5: Extending video (using source parameter, not video)...")
+                # For Veo 3.1 extensions, we need to pass the uploaded file directly as source
+                # The API expects the file URI/name, not a Video object
+                print(f"[Veo3] Step 5: Extending video...")
                 print(f"[Veo3]   Model: veo-3.1-generate-preview (must use generate, not fast-generate for extensions)")
-                print(f"[Veo3]   Source: {uploaded_file.name}")
+                print(f"[Veo3]   Source file: {uploaded_file.name}")
                 
-                # Based on the error, GenerateVideosSource is expected but doesn't accept 'file' parameter
-                # Looking at user's code: they used the generated video object directly
-                # Let's try creating GenerateVideosSource with the file's URI/name
-                # Or check if we can pass the file object directly in a different way
-                
-                # Based on user's code: source=base_video where base_video = op.response.generated_videos[0]
-                # The error says: "Type mismatch in GeneratedVideo.video: expected Video, got File"
-                # So we need to create a Video object from the File, not use File directly
                 operation = None
                 last_error = None
                 
-                # Based on inspection: 
-                # GenerateVideosSource(video: Optional[Video] = None)
-                # Video(uri: Optional[str] = None, videoBytes: Optional[bytes] = None, mimeType: Optional[str] = None)
-                # GeneratedVideo(video: Optional[Video] = None)
-                #
-                # The user's code uses: source=base_video where base_video is GeneratedVideo
-                # But the error says it expects GenerateVideosSource
-                # Let's try both approaches
-                operation = None
-                last_error = None
-                
-                # Method 1: Create Video from file URI, then GenerateVideosSource
-                # Note: Don't pass mimeType if it causes encoding errors
+                # Method 1: Pass the file URI directly (simplest approach)
                 try:
-                    video_obj = types.Video(uri=uploaded_file.name)
-                    source = types.GenerateVideosSource(video=video_obj)
+                    # Use the file name/URI directly as source
                     operation = client.models.generate_videos(
-                        model="veo-3.1-generate-preview",  # Must use generate (not fast-generate) for extensions
-                        source=source,
+                        model="veo-3.1-generate-preview",
+                        source=uploaded_file.name,  # Pass file URI directly
                     )
-                    print(f"[Veo3] OK Method 1 (GenerateVideosSource with Video URI) succeeded")
+                    print(f"[Veo3] OK Method 1 (File URI as source) succeeded")
                 except Exception as e1:
                     last_error = e1
-                    # Check if it's a quota error - don't try other methods if quota is exhausted
+                    # Check if it's a quota error
                     if "429" in str(e1) or "RESOURCE_EXHAUSTED" in str(e1) or "quota" in str(e1).lower():
                         raise Exception(f"Gemini API quota exceeded. Please check your plan and billing details: {e1}")
-                    print(f"[Veo3] Method 1 (GenerateVideosSource with Video URI) failed: {e1}")
+                    print(f"[Veo3] Method 1 (File URI as source) failed: {e1}")
                     
-                    # Method 2: Create Video from file bytes, then GenerateVideosSource
-                    # Note: Video bytes may not be supported for extension - only URI might work
+                    # Method 2: Try using the file object directly
                     try:
-                        video_obj = types.Video(videoBytes=base_video_bytes)
-                        source = types.GenerateVideosSource(video=video_obj)
                         operation = client.models.generate_videos(
-                            model="veo-3.1-generate-preview",  # Must use generate (not fast-generate) for extensions
-                            source=source,
+                            model="veo-3.1-generate-preview",
+                            source=uploaded_file,  # Pass file object directly
                         )
-                        print(f"[Veo3] OK Method 2 (GenerateVideosSource with Video bytes) succeeded")
+                        print(f"[Veo3] OK Method 2 (File object as source) succeeded")
                     except Exception as e2:
                         last_error = e2
-                        # Check if it's a quota error - don't try other methods if quota is exhausted
                         if "429" in str(e2) or "RESOURCE_EXHAUSTED" in str(e2) or "quota" in str(e2).lower():
                             raise Exception(f"Gemini API quota exceeded. Please check your plan and billing details: {e2}")
-                        print(f"[Veo3] Method 2 (GenerateVideosSource with Video bytes) failed: {e2}")
+                        print(f"[Veo3] Method 2 (File object as source) failed: {e2}")
                         
-                        # Method 3: Try GeneratedVideo (as per user's code) with Video URI
+                        # Method 3: Try using the file's URI property if it exists
                         try:
-                            video_obj = types.Video(uri=uploaded_file.name)
-                            generated_video = types.GeneratedVideo(video=video_obj)
-                            operation = client.models.generate_videos(
-                                model="veo-3.1-generate-preview",  # Must use generate (not fast-generate) for extensions
-                                source=generated_video,
-                            )
-                            print(f"[Veo3] OK Method 3 (GeneratedVideo with Video URI) succeeded")
+                            file_uri = getattr(uploaded_file, 'uri', None) or getattr(uploaded_file, 'name', None)
+                            if file_uri:
+                                operation = client.models.generate_videos(
+                                    model="veo-3.1-generate-preview",
+                                    source=file_uri,
+                                )
+                                print(f"[Veo3] OK Method 3 (File URI property) succeeded")
+                            else:
+                                raise Exception("No URI found in uploaded file")
                         except Exception as e3:
                             last_error = e3
-                            # Check if it's a quota error
                             if "429" in str(e3) or "RESOURCE_EXHAUSTED" in str(e3) or "quota" in str(e3).lower():
                                 raise Exception(f"Gemini API quota exceeded. Please check your plan and billing details: {e3}")
-                            print(f"[Veo3] Method 3 (GeneratedVideo with Video URI) failed: {e3}")
-                            
-                            # Method 4: Try GeneratedVideo with Video bytes
-                            try:
-                                video_obj = types.Video(videoBytes=base_video_bytes)
-                                generated_video = types.GeneratedVideo(video=video_obj)
-                                operation = client.models.generate_videos(
-                                    model="veo-3.1-generate-preview",  # Must use generate (not fast-generate) for extensions
-                                    source=generated_video,
-                                )
-                                print(f"[Veo3] OK Method 4 (GeneratedVideo with Video bytes) succeeded")
-                            except Exception as e4:
-                                last_error = e4
-                                # Check if it's a quota error
-                                if "429" in str(e4) or "RESOURCE_EXHAUSTED" in str(e4) or "quota" in str(e4).lower():
-                                    raise Exception(f"Gemini API quota exceeded. Please check your plan and billing details: {e4}")
-                                print(f"[Veo3] Method 4 (GeneratedVideo with Video bytes) failed: {e4}")
-                                raise Exception(f"Could not extend video. All methods failed. Last error: {last_error}")
+                            print(f"[Veo3] Method 3 (File URI property) failed: {e3}")
+                            raise Exception(f"Could not extend video. All methods failed. Last error: {last_error}")
                 
                 if operation is None:
                     raise Exception(f"Failed to create extension operation: {last_error}")
