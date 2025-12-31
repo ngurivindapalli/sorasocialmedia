@@ -59,9 +59,11 @@ export const authUtils = {
       } else if (error.message) {
         // Network or other error
         if (error.message.includes('Network Error') || error.code === 'ERR_NETWORK') {
-          errorMessage = 'Network error. Please check if the backend is running on http://localhost:8000'
+          const apiUrl = error.config?.baseURL || 'backend server'
+          errorMessage = `Network error. Please check if the backend is running at ${apiUrl}`
         } else if (error.code === 'ECONNREFUSED') {
-          errorMessage = 'Connection refused. Please check if the backend is running on http://localhost:8000'
+          const apiUrl = error.config?.baseURL || 'backend server'
+          errorMessage = `Connection refused. Please check if the backend is running at ${apiUrl}`
         } else {
           errorMessage = error.message || errorMessage
         }
