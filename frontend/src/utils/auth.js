@@ -50,8 +50,12 @@ export const authUtils = {
         console.error('Connection error - request made but no response')
         console.error('Request URL:', error.config?.url)
         console.error('Base URL:', error.config?.baseURL)
-        console.error('Full URL:', error.config?.baseURL + error.config?.url)
-        errorMessage = 'Unable to connect to server. Please check if the backend is running on  http://localhost:8000'
+        const fullUrl = error.config?.baseURL 
+          ? (error.config.baseURL.endsWith('/') ? error.config.baseURL.slice(0, -1) : error.config.baseURL) + 
+            (error.config.url.startsWith('/') ? error.config.url : '/' + error.config.url)
+          : error.config?.url
+        console.error('Full URL:', fullUrl)
+        errorMessage = `Unable to connect to server at ${fullUrl || 'backend URL'}. Please check if the backend is running and VITE_API_URL is set correctly.`
       } else if (error.message) {
         // Network or other error
         if (error.message.includes('Network Error') || error.code === 'ERR_NETWORK') {
@@ -107,7 +111,12 @@ export const authUtils = {
         }
       } else if (error.request) {
         // Request was made but no response received
-        errorMessage = 'Unable to connect to server. Please check if the backend is running.'
+        const fullUrl = error.config?.baseURL 
+          ? (error.config.baseURL.endsWith('/') ? error.config.baseURL.slice(0, -1) : error.config.baseURL) + 
+            (error.config.url.startsWith('/') ? error.config.url : '/' + error.config.url)
+          : error.config?.url || 'backend'
+        console.error('Connection error - Full URL attempted:', fullUrl)
+        errorMessage = `Unable to connect to server at ${fullUrl}. Please check if the backend is running and VITE_API_URL is set correctly in your environment.`
       } else {
         // Something else happened
         errorMessage = error.message || errorMessage

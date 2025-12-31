@@ -3,10 +3,13 @@ import axios from 'axios'
 // API base URL
 // In development, use Vite proxy to avoid CORS issues
 // The proxy in vite.config.js will forward /api requests to http://localhost:8000
-// In production, use the full URL or environment variable
-const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? '' : 'http://localhost:8000')
+// In production, use the full URL from environment variable
+const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? '' : 'https://sorasocialmedia-1.onrender.com')
 
 console.log('[API] Mode:', import.meta.env.MODE, 'API_URL:', API_URL || '(using Vite proxy)')
+if (!API_URL && !import.meta.env.DEV) {
+  console.error('[API] WARNING: VITE_API_URL not set in production! API calls may fail.')
+}
 
 // Create axios instance with default config
 const api = axios.create({
