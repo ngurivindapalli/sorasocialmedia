@@ -61,19 +61,26 @@ class Mem0Service:
             if not mem0_config:
                 if vector_db == 's3_vectors' and aws_access_key and aws_secret_key and aws_bucket:
                     # Use S3 for vector storage (persistent across deployments)
+                    # AWS credentials should be set via environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+                    # Mem0 will automatically use them from environment
                     mem0_config = {
                         "vector_store": {
                             "provider": "s3_vectors",
                             "config": {
                                 "collection_name": "mem0_memories",
-                                "bucket": aws_bucket,
-                                "region": aws_region,
-                                "aws_access_key_id": aws_access_key,
-                                "aws_secret_access_key": aws_secret_key
+                                "vector_bucket_name": aws_bucket,  # Correct field name
+                                "region_name": aws_region  # Correct field name
+                                # AWS credentials are read from environment variables automatically
                             }
                         }
                     }
+                    # Ensure AWS credentials are in environment for Mem0 to use
+                    if aws_access_key:
+                        os.environ['AWS_ACCESS_KEY_ID'] = aws_access_key
+                    if aws_secret_key:
+                        os.environ['AWS_SECRET_ACCESS_KEY'] = aws_secret_key
                     print(f"[Mem0] Configuring S3 vectors with bucket: {aws_bucket} (region: {aws_region})")
+                    print(f"[Mem0] AWS credentials will be read from environment variables")
                 else:
                     # Fallback to ChromaDB with persistent directory
                     backend_dir = Path(__file__).parent.parent
