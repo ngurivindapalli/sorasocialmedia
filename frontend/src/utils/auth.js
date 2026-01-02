@@ -2,27 +2,28 @@
 
 import { api } from './api'
 
-export const authUtils = {
-  // Helper function to retry API calls with exponential backoff (for Render cold starts)
-  async function retryApiCall(apiCall, maxRetries = 3, baseDelay = 2000) {
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        return await apiCall()
-      } catch (error) {
-        // If it's the last attempt or error is not a network/connection error, throw
-        if (attempt === maxRetries - 1 || 
-            (error.response && error.response.status !== 0) ||
-            (!error.request && error.response)) {
-          throw error
-        }
-        
-        // Network/connection error - retry with exponential backoff
-        const delay = baseDelay * Math.pow(2, attempt)
-        console.log(`[Auth] Connection error, retrying in ${delay}ms... (attempt ${attempt + 1}/${maxRetries})`)
-        await new Promise(resolve => setTimeout(resolve, delay))
+// Helper function to retry API calls with exponential backoff (for Render cold starts)
+async function retryApiCall(apiCall, maxRetries = 3, baseDelay = 2000) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await apiCall()
+    } catch (error) {
+      // If it's the last attempt or error is not a network/connection error, throw
+      if (attempt === maxRetries - 1 || 
+          (error.response && error.response.status !== 0) ||
+          (!error.request && error.response)) {
+        throw error
       }
+      
+      // Network/connection error - retry with exponential backoff
+      const delay = baseDelay * Math.pow(2, attempt)
+      console.log(`[Auth] Connection error, retrying in ${delay}ms... (attempt ${attempt + 1}/${maxRetries})`)
+      await new Promise(resolve => setTimeout(resolve, delay))
     }
   }
+}
+
+export const authUtils = {
 
   // Sign up a new user
   async signup(username, email, password) {
