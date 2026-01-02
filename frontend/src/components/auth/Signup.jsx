@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { authUtils } from '../../utils/auth'
 import Logo from '../Logo'
+import { Loader2, AlertCircle } from 'lucide-react'
 
 function Signup() {
   const [username, setUsername] = useState('')
@@ -10,7 +11,27 @@ function Signup() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [backendStatus, setBackendStatus] = useState('checking') // 'checking' | 'online' | 'offline'
   const navigate = useNavigate()
+
+  // Check backend health on mount
+  useEffect(() => {
+    const checkBackendHealth = async () => {
+      try {
+        const { api } = await import('../../utils/api')
+        const response = await api.get('/api/health', { timeout: 10000 })
+        if (response.data?.status === 'healthy') {
+          setBackendStatus('online')
+        } else {
+          setBackendStatus('offline')
+        }
+      } catch (err) {
+        console.warn('[Signup] Backend health check failed:', err)
+        setBackendStatus('offline')
+      }
+    }
+    checkBackendHealth()
+  }, [])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -93,6 +114,13 @@ function Signup() {
         // Fallback to message field
         else if (errorData.message) {
           errorMessage = errorData.message
+        }
+      } else if (err.request && !err.response) {
+        // Network/connection error - likely Render cold start
+        if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
+          errorMessage = 'Backend is starting up (this may take 30-60 seconds on free tier). Please wait a moment and try again.'
+        } else {
+          errorMessage = 'Unable to connect to server. The backend may be starting up. Please wait a moment and try again.'
         }
       } else if (err.message) {
         errorMessage = err.message
@@ -184,9 +212,22 @@ function Signup() {
               />
             </div>
 
+            {backendStatus === 'checking' && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center gap-3">
+                <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                <p className="text-blue-800 text-sm">Checking backend connection...</p>
+              </div>
+            )}
+            {backendStatus === 'offline' && !error && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 flex items-center gap-3">
+                <AlertCircle className="w-4 h-4 text-yellow-600" />
+                <p className="text-yellow-800 text-sm">Backend may be starting up. This can take 30-60 seconds on free tier. Please try again in a moment.</p>
+              </div>
+            )}
             {error && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-600">
-                {error}
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-red-600" />
+                <p className="text-red-800 text-sm">{error}</p>
               </div>
             )}
 

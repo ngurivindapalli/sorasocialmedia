@@ -17,7 +17,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 60000, // 60 second timeout (increased for document uploads and context summaries)
+  timeout: 90000, // 90 second timeout (increased for Render cold starts + auth operations)
 })
 
 // Add request logging in development
