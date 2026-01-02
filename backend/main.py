@@ -32,6 +32,7 @@ from services.jira_service import JiraService
 from utils.hyperspell_helper import get_hyperspell_context as get_memory_context
 from utils.post_memory_helper import save_post_to_memory, is_first_post, get_post_performance_context, find_existing_post_with_image
 from utils.veo_helper import wait_for_video_completion_with_extensions
+from utils.user_id_helper import normalize_user_id, get_user_id_from_request
 from services.web_research_service import WebResearchService
 from services.seo_aeo_service import SEOAEOService
 from models.schemas import (
@@ -4564,9 +4565,9 @@ async def get_marketing_post_suggestions(
             )
         
         # Get user context from Memory (documents are stored in S3 + Mem0)
-        # Use email as user_id - this MUST match what was used when saving memories
-        user_id = current_user.email.lower().strip()  # Normalize email (lowercase, no whitespace)
-        print(f"[API] Using user email for Memory: {user_id}")
+        # CRITICAL: Use consistent normalization to ensure memories persist across deployments
+        user_id = get_user_id_from_request(current_user)
+        print(f"[API] Using normalized user_id for Memory: {user_id}")
         print(f"[API] User details - username: {current_user.username}, email: {current_user.email}, id: {current_user.id}")
         user_context = ""
         post_performance_context = ""

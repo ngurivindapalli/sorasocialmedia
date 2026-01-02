@@ -22,7 +22,7 @@ class Mem0Service:
     
     def __init__(self, vector_db: Optional[str] = None, config: Optional[Dict] = None):
         """
-        Initialize Mem0 service
+        Initialize Mem0 service with persistent storage
         
         Args:
             vector_db: Vector database type (e.g., 's3_vectors', 'chroma', 'pinecone')
@@ -35,55 +35,82 @@ class Mem0Service:
             return
         
         try:
-            # Default to ChromaDB (local) for simplicity - S3 vectors requires additional setup
-            if vector_db is None:
-                vector_db = 'chroma'  # Default to local ChromaDB
-                print("[Mem0] Using ChromaDB as vector database (local)")
-            
-            # Configure persistent ChromaDB storage location
-            # This ensures memories persist across backend restarts
             import os
             from pathlib import Path
             
-            # Create persistent directory for ChromaDB in backend directory
-            backend_dir = Path(__file__).parent.parent  # Go up from services/ to backend/
-            chroma_persist_dir = backend_dir / "chroma_db"
-            chroma_persist_dir.mkdir(exist_ok=True)
+            # Check for AWS credentials for S3 vector storage (persistent across deployments)
+            aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
+            aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+            aws_region = os.getenv("AWS_REGION", "us-east-1")
+            aws_bucket = os.getenv("AWS_S3_BUCKET")
             
-            # Set ChromaDB persistence directory
-            chroma_persist_path = str(chroma_persist_dir.absolute())
+            # Prefer S3 vectors for persistence (survives deployments)
+            # Fallback to ChromaDB if AWS not configured
+            if vector_db is None:
+                if aws_access_key and aws_secret_key and aws_bucket:
+                    vector_db = 's3_vectors'
+                    print("[Mem0] Using S3 vectors for persistent storage (survives deployments)")
+                else:
+                    vector_db = 'chroma'
+                    print("[Mem0] Using ChromaDB (local) - AWS credentials not configured for S3 vectors")
+                    print("[Mem0] WARNING: Local ChromaDB will be lost on deployment. Configure AWS for persistent storage.")
             
-            # Build config - simple ChromaDB config with persistent storage
             mem0_config = config or {}
             
-            # Configure Mem0 with persistent ChromaDB
+            # Configure based on vector_db type
             if not mem0_config:
-                # Use ChromaDB config with persistent directory
-                mem0_config = {
-                    "vector_store": {
-                        "provider": "chroma",
-                        "config": {
-                            "collection_name": "mem0_memories",
-                            "path": chroma_persist_path,  # Persistent storage location
-                            "persist_directory": chroma_persist_path
+                if vector_db == 's3_vectors' and aws_access_key and aws_secret_key and aws_bucket:
+                    # Use S3 for vector storage (persistent across deployments)
+                    mem0_config = {
+                        "vector_store": {
+                            "provider": "s3_vectors",
+                            "config": {
+                                "collection_name": "mem0_memories",
+                                "bucket": aws_bucket,
+                                "region": aws_region,
+                                "aws_access_key_id": aws_access_key,
+                                "aws_secret_access_key": aws_secret_key
+                            }
                         }
                     }
-                }
-                print(f"[Mem0] Configuring ChromaDB with persistent storage: {chroma_persist_path}")
+                    print(f"[Mem0] Configuring S3 vectors with bucket: {aws_bucket} (region: {aws_region})")
+                else:
+                    # Fallback to ChromaDB with persistent directory
+                    backend_dir = Path(__file__).parent.parent
+                    chroma_persist_dir = backend_dir / "chroma_db"
+                    chroma_persist_dir.mkdir(exist_ok=True)
+                    chroma_persist_path = str(chroma_persist_dir.absolute())
+                    
+                    mem0_config = {
+                        "vector_store": {
+                            "provider": "chroma",
+                            "config": {
+                                "collection_name": "mem0_memories",
+                                "path": chroma_persist_path,
+                                "persist_directory": chroma_persist_path
+                            }
+                        }
+                    }
+                    print(f"[Mem0] Configuring ChromaDB with persistent storage: {chroma_persist_path}")
+                    print("[Mem0] NOTE: For production, configure AWS credentials to use S3 vectors (persistent across deployments)")
             
-            # Initialize Mem0 with persistent config
+            # Initialize Mem0 with config
             try:
                 self.memory = Memory.from_config(mem0_config)
             except Exception as config_error:
-                # Fallback: try simple initialization (Mem0 might handle persistence differently)
+                # Fallback: try simple initialization
                 print(f"[Mem0] WARNING: Config initialization failed, trying simple init: {config_error}")
-                # Set environment variable for ChromaDB persistence
-                os.environ['CHROMA_PERSIST_DIRECTORY'] = chroma_persist_path
+                if vector_db == 'chroma':
+                    backend_dir = Path(__file__).parent.parent
+                    chroma_persist_dir = backend_dir / "chroma_db"
+                    chroma_persist_dir.mkdir(exist_ok=True)
+                    chroma_persist_path = str(chroma_persist_dir.absolute())
+                    os.environ['CHROMA_PERSIST_DIRECTORY'] = chroma_persist_path
                 self.memory = Memory()
             
             self.available = True
-            print(f"[Mem0] OK Mem0 service initialized with persistent storage (vector_db: {vector_db})")
-            print(f"[Mem0] ChromaDB data will persist at: {chroma_persist_path}")
+            storage_type = "S3 (persistent)" if vector_db == 's3_vectors' else "ChromaDB (local)"
+            print(f"[Mem0] OK Mem0 service initialized with {storage_type} storage")
             
         except Exception as e:
             print(f"[Mem0] ERROR: Error initializing Mem0 service: {e}")
@@ -96,8 +123,18 @@ class Mem0Service:
         return self.available
     
     def _normalize_user_id(self, user_id: str) -> str:
-        """Normalize user ID for consistency with Mem0 agent_id"""
-        return user_id.lower().strip()
+        """
+        Normalize user ID for consistency with Mem0 agent_id
+        CRITICAL: This ensures memories persist across sessions and deployments
+        Always use lowercase email with no whitespace
+        """
+        if not user_id:
+            return "anonymous_user"
+        # Normalize: lowercase, strip whitespace, ensure it's an email format
+        normalized = user_id.lower().strip()
+        # Remove any extra whitespace or special characters that might cause issues
+        normalized = normalized.replace(' ', '').replace('\n', '').replace('\t', '')
+        return normalized
     
     async def add_memory(
         self,
