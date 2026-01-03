@@ -117,3 +117,5 @@ aws iam get-user-policy --user-name noel-bedrock-user --policy-name <POLICY_NAME
 - **IAM Policies**: https://console.aws.amazon.com/iam/home#/policies
 
 
+
+

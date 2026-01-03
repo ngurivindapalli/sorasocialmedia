@@ -71,3 +71,5 @@ asyncio.run(test())
 - **Cross-region inference**: Navigate via sidebar → Infer → Cross-region inference
 
 
+
+

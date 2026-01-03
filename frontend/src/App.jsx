@@ -4,7 +4,7 @@ import Login from './components/auth/Login'
 import Signup from './components/auth/Signup'
 import Dashboard from './pages/Dashboard'
 import MarketingPost from './pages/MarketingPost'
-import HyperspellMemories from './pages/HyperspellMemories'
+// Hyperspell removed - using MemoryService (S3 + Mem0) directly
 import SEOAEOTracker from './pages/SEOAEOTracker'
 import TermsOfService from './pages/TermsOfService'
 import PrivacyPolicy from './pages/PrivacyPolicy'
@@ -24,7 +24,7 @@ function App() {
         <Route path="/terms-of-service" element={<TermsOfService />} />
         <Route path="/privacy-policy" element={<PrivacyPolicy />} />
         <Route path="/marketing-post" element={<MarketingPost />} />
-        <Route path="/hyperspell-memories" element={<HyperspellMemories />} />
+        {/* Hyperspell route removed - using MemoryService (S3 + Mem0) directly */}
         <Route path="/seo-aeo-tracker" element={<SEOAEOTracker />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -29,7 +29,7 @@ from services.bedrock_service import BedrockService
 from services.notion_service import NotionService
 from services.google_drive_service import GoogleDriveService
 from services.jira_service import JiraService
-from utils.hyperspell_helper import get_hyperspell_context as get_memory_context
+# Hyperspell removed - using MemoryService (S3 + Mem0) directly
 from utils.post_memory_helper import save_post_to_memory, is_first_post, get_post_performance_context, find_existing_post_with_image
 from utils.veo_helper import wait_for_video_completion_with_extensions
 from utils.user_id_helper import normalize_user_id, get_user_id_from_request
@@ -6088,87 +6088,9 @@ async def get_preferred_settings():
 
 # ==================== HYPERSPELL ENDPOINTS ====================
 
-@app.get("/api/hyperspell/connect-url")
-async def get_hyperspell_connect_url(current_user: User = Depends(get_current_user)):
-    """
-    Get Hyperspell Connect URL for user to link their accounts.
-    This allows Hyperspell to build a memory layer from user's connected data sources.
-    """
-    try:
-        if not current_user:
-            raise HTTPException(status_code=401, detail="Authentication required")
-        
-        if not memory_service.is_available():
-            raise HTTPException(
-                status_code=503,
-                detail="Hyperspell service is not available. Please set HYPERSPELL_API_KEY environment variable."
-            )
-        
-        # Use email as user_id to match Hyperspell dashboard format
-        hyperspell_user_id = current_user.email
-        connect_url = memory_service.get_connect_url(hyperspell_user_id)
-        
-        return {
-            "connect_url": connect_url,
-            "message": "Use this URL to connect your accounts to Hyperspell",
-            "instructions": "Open this URL in a new tab to connect your accounts (Gmail, Calendar, Documents, etc.)"
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[API] Error getting Hyperspell connect URL: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+# Hyperspell endpoints removed - using MemoryService (S3 + Mem0) directly
 
-
-@app.post("/api/hyperspell/query")
-async def query_hyperspell_memories(
-    query: dict,
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Query Hyperspell memory layer for relevant context.
-    
-    Request body:
-    {
-        "query": "What is the project deadline?",
-        "max_results": 5
-    }
-    """
-    try:
-        if not current_user:
-            raise HTTPException(status_code=401, detail="Authentication required")
-        
-        if not memory_service.is_available():
-            raise HTTPException(
-                status_code=503,
-                detail="Hyperspell service is not available. Please set HYPERSPELL_API_KEY environment variable."
-            )
-        
-        # Use email as user_id to match Hyperspell dashboard format
-        hyperspell_user_id = current_user.email.lower().strip()
-        query_text = query.get("query", "")
-        max_results = query.get("max_results", 5)
-        
-        if not query_text:
-            raise HTTPException(status_code=400, detail="Query text is required")
-        
-        result = await memory_service.query_memories(hyperspell_user_id, query_text, max_results)
-        
-        if result is None:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to query Hyperspell memories. Please ensure your accounts are connected."
-            )
-        
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[API] Error querying Hyperspell memories: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/hyperspell/summaries")
+@app.post("/api/memory/summaries")
 async def get_context_summaries(
     current_user: User = Depends(get_current_user)
 ):
@@ -6183,7 +6105,7 @@ async def get_context_summaries(
         if not memory_service.is_available():
             raise HTTPException(
                 status_code=503,
-                detail="Hyperspell service is not available. Please set HYPERSPELL_API_KEY environment variable."
+                detail="Memory service is not available. Please check S3 and Mem0 configuration."
             )
         
         if not openai_service:
@@ -6193,7 +6115,8 @@ async def get_context_summaries(
             )
         
         # Use normalized email as user_id (same as marketing posts)
-        user_id = current_user.email.lower().strip()
+        # CRITICAL: Normalize user_id consistently - Mem0 stores with lowercase email
+        user_id = normalize_user_id(current_user)
         print(f"[API] Getting context summaries for user: {user_id}")
         
         # Step 1: Get unified brand context from Memory (S3 + Mem0)
@@ -6202,6 +6125,8 @@ async def get_context_summaries(
         
         if not all_memories_context or len(all_memories_context.strip()) < 10:
             print(f"[API] No unified brand context found for user: {user_id}")
+            print(f"[API] DEBUG: Memory service available: {memory_service.is_available()}")
+            print(f"[API] DEBUG: Mem0 service available: {memory_service.mem0_service.is_available() if hasattr(memory_service, 'mem0_service') else 'N/A'}")
             return {
                 "overall_summary": "No context available. Upload documents, add competitors, or generate posts to build your brand context.",
                 "brand_context": "No brand context available. Upload documents about your brand, products, or services.",
@@ -6369,291 +6294,7 @@ Focus on market trends, industry analysis, target audience, and market research.
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/hyperspell/upload")
-async def upload_to_hyperspell(
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Upload a document to Hyperspell memory layer.
-    Supported formats: PDF, DOCX, TXT, etc.
-    """
-    try:
-        if not current_user:
-            raise HTTPException(status_code=401, detail="Authentication required")
-        
-        if not memory_service.is_available():
-            raise HTTPException(
-                status_code=503,
-                detail="Hyperspell service is not available. Please set HYPERSPELL_API_KEY environment variable."
-            )
-        
-        # Use email as user_id to match Hyperspell dashboard format
-        # Normalize email (lowercase, no whitespace) to ensure consistency
-        hyperspell_user_id = current_user.email.lower().strip()
-        print(f"[API] Uploading document to Memory (S3 + Mem0) for user: {hyperspell_user_id}")
-        
-        # Save uploaded file temporarily
-        import tempfile
-        import os
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp_file:
-            content = await file.read()
-            tmp_file.write(content)
-            tmp_path = tmp_file.name
-        
-        try:
-            # Extract text from document first (for PDFs, DOCX, etc.)
-            # This ensures the content is searchable in Hyperspell
-            file_ext = os.path.splitext(file.filename)[1].lower()
-            text_content = None
-            
-            # For PDF, DOCX, DOC, TXT - extract text and save as text memory
-            if file_ext in ('.pdf', '.docx', '.doc', '.txt', '.md'):
-                try:
-                    text_content = await document_service.extract_text(tmp_path, file.content_type or '')
-                    print(f"[API] Extracted {len(text_content)} characters from {file.filename}")
-                except Exception as e:
-                    print(f"[API] Warning: Failed to extract text from {file.filename}: {e}")
-                    # Continue with binary upload as fallback
-            
-            # If we have extracted text, append it to unified brand context memory
-            if text_content and len(text_content.strip()) > 0:
-                print(f"[API] Appending document to unified brand context memory")
-                document_content = f"Document: {file.filename}\n\n{text_content}"
-                result = await memory_service.append_to_unified_brand_context(
-                    user_id=hyperspell_user_id,
-                    new_content=document_content,
-                    content_type="document"
-                )
-                
-                if result is None:
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Failed to save document to unified brand context. Hyperspell did not return a valid resource_id."
-                    )
-                
-                # Double-check: Verify resource_id exists
-                resource_id = result.get("resource_id")
-                if not resource_id or (isinstance(resource_id, str) and len(resource_id.strip()) == 0):
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Failed to save document: Hyperspell returned invalid resource_id. Memory may not have been created."
-                    )
-                
-                # Verify memory was actually created
-                verified = result.get("verified", False)
-                if not verified:
-                    print(f"[API] ⚠️ WARNING: Document saved but verification incomplete. Resource ID: {resource_id}")
-                
-                return {
-                    "success": True,
-                    "resource_id": resource_id,
-                    "filename": file.filename,
-                    "message": "Document added to unified brand context successfully" if verified else "Document saved (verification pending)",
-                    "context_updated": True,  # Flag to indicate context was updated
-                    "verified": verified  # Indicates memory was verified in Hyperspell
-                }
-            else:
-                # Fallback: Upload binary file (for unsupported formats or extraction failures)
-                print(f"[API] Uploading binary file to Hyperspell (text extraction not available)")
-                result = await memory_service.upload_document(
-                    user_id=hyperspell_user_id,
-                    file_path=tmp_path,
-                    filename=file.filename
-                )
-                
-                if result is None:
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Failed to upload document to Hyperspell. Hyperspell did not return a valid resource_id."
-                    )
-                
-                # Double-check: Verify resource_id exists
-                resource_id = result.get("resource_id")
-                if not resource_id or (isinstance(resource_id, str) and len(resource_id.strip()) == 0):
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Failed to upload document: Hyperspell returned invalid resource_id. Memory may not have been created."
-                    )
-                
-                return {
-                    "success": True,
-                    "resource_id": resource_id,
-                    "filename": result.get("filename"),
-                    "message": "Document uploaded successfully to Hyperspell memory layer",
-                    "verified": result.get("verified", False)
-                }
-        finally:
-            # Clean up temporary file
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-                
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[API] Error uploading to Hyperspell: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/hyperspell/add-memory")
-async def add_hyperspell_memory(
-    request: dict,
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Add a text memory to Hyperspell memory layer.
-    For brand context related content (competitors, brand info, etc.), uses unified brand context.
-    For other content, uses regular memory storage.
-    
-    Request body:
-    {
-        "text": "Your memory text here...",
-        "collection": "optional_collection_name"
-    }
-    """
-    try:
-        if not memory_service.is_available():
-            raise HTTPException(
-                status_code=503,
-                detail="Hyperspell service is not available. Please set HYPERSPELL_API_KEY environment variable."
-            )
-        
-        text = request.get("text", "").strip()
-        if not text:
-            raise HTTPException(status_code=400, detail="Text is required")
-        
-        collection = request.get("collection", "user_memories")
-        # Normalize email (lowercase, no whitespace) to ensure consistency
-        user_id = current_user.email.lower().strip() if current_user else "anonymous"
-        
-        # Brand context related collections should use unified brand context
-        brand_context_collections = ["competitors", "brand_context", "brand", "documents", "company", "market"]
-        use_unified = collection.lower() in [c.lower() for c in brand_context_collections]
-        
-        if use_unified:
-            print(f"[API] Adding to unified brand context for user: {user_id} (collection: {collection})")
-            result = await memory_service.append_to_unified_brand_context(
-                user_id=user_id,
-                new_content=text,
-                content_type=collection
-            )
-            message = "Content added to unified brand context successfully"
-        else:
-            print(f"[API] Adding text memory to Hyperspell for user: {user_id} (collection: {collection})")
-            result = await memory_service.add_text_memory(
-                user_id=user_id,
-                text=text,
-                collection=collection
-            )
-            message = "Memory added successfully to Hyperspell"
-        
-        if result is None:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to add memory to Hyperspell. Hyperspell did not return a valid resource_id."
-            )
-        
-        # Double-check: Verify resource_id exists
-        resource_id = result.get("resource_id")
-        if not resource_id or (isinstance(resource_id, str) and len(resource_id.strip()) == 0):
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to add memory: Hyperspell returned invalid resource_id. Memory may not have been created."
-            )
-        
-        # Verify memory was actually created
-        verified = result.get("verified", False)
-        if not verified:
-            print(f"[API] ⚠️ WARNING: Memory saved but verification incomplete. Resource ID: {resource_id}")
-        
-        return {
-            "success": True,
-            "resource_id": resource_id,
-            "message": message if verified else f"{message} (verification pending)",
-            "text_preview": result.get("text_preview") or text[:100] + "..." if len(text) > 100 else text,
-            "collection": result.get("collection") or collection,
-            "context_updated": use_unified,  # Flag to indicate brand context was updated
-            "verified": verified  # Indicates memory was verified in Hyperspell
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[API] Error adding memory: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to add memory: {str(e)}")
-
-
-@app.get("/api/hyperspell/status")
-async def get_hyperspell_status():
-    """
-    Check Hyperspell service status and availability.
-    Public endpoint - no authentication required.
-    """
-    try:
-        available = memory_service.is_available()
-        return {
-            "available": available,
-            "message": "Hyperspell is available" if available else "Hyperspell is not configured. Set HYPERSPELL_API_KEY environment variable."
-        }
-    except Exception as e:
-        print(f"[API] Error checking Hyperspell status: {str(e)}")
-        return {
-            "available": False,
-            "message": f"Error checking status: {str(e)}"
-        }
-
-
-@app.get("/api/hyperspell/mcp/info")
-async def get_mcp_server_info():
-    """
-    Get information about the Hyperspell MCP server and how to configure it.
-    """
-    try:
-        import os
-        backend_path = os.path.dirname(os.path.abspath(__file__))
-        mcp_server_path = os.path.join(backend_path, "services", "hyperspell_mcp_server.py")
-        start_script_path = os.path.join(backend_path, "start_mcp_server.py")
-        
-        return {
-            "mcp_server_available": True,
-            "mcp_server_path": mcp_server_path,
-            "start_script_path": start_script_path,
-            "hyperspell_available": memory_service.is_available(),
-            "configuration": {
-                "claude_desktop": {
-                    "macos_path": "~/Library/Application Support/Claude/claude_desktop_config.json",
-                    "windows_path": "%APPDATA%\\Claude\\claude_desktop_config.json",
-                    "config_example": {
-                        "mcpServers": {
-                            "hyperspell": {
-                                "command": "python",
-                                "args": [mcp_server_path],
-                                "env": {
-                                    "HYPERSPELL_API_KEY": os.getenv("HYPERSPELL_API_KEY", "Your_API_Key"),
-                                    "HYPERSPELL_USER_ID": os.getenv("HYPERSPELL_USER_ID", "Your_User_ID")
-                                }
-                            }
-                        }
-                    }
-                },
-                "available_tools": [
-                    "search",
-                    "add_memory",
-                    "get_memory",
-                    "upload_file",
-                    "list_integrations",
-                    "connect_integration",
-                    "user_info"
-                ]
-            },
-            "instructions": "Add the MCP server configuration to your Claude Desktop config.json file. See the configuration example above."
-        }
-    except Exception as e:
-        print(f"[API] Error getting MCP server info: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+# Hyperspell endpoints removed - all functionality now uses MemoryService (S3 + Mem0) directly
 
 
 # ===== SEO/AEO ENDPOINTS =====

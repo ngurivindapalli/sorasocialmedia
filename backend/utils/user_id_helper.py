@@ -57,3 +57,4 @@ def get_user_id_from_request(current_user: Optional[User] = None) -> str:
     """
     return normalize_user_id(user=current_user)
 
+

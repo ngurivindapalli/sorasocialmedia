@@ -133,7 +133,7 @@ function BrandContext() {
 
       // Use the new summaries endpoint that uses get_all_memories_context + GPT (same as marketing posts)
       try {
-        const summariesResponse = await api.post('/api/hyperspell/summaries')
+        const summariesResponse = await api.post('/api/memory/summaries')
         console.log('[BrandContext] Summaries response:', summariesResponse.data)
         
         // Set all summaries from the response
@@ -165,7 +165,7 @@ function BrandContext() {
   /*
   const loadSummaries_OLD = async () => {
     try {
-      const brandResponse = await api.post('/api/hyperspell/query', {
+      const brandResponse = await api.post('/api/memory/query', {
           query: 'brand guidelines, company information, business context, products, services, company values, brand identity',
           max_results: 10
         })
@@ -249,7 +249,7 @@ function BrandContext() {
 
       // Competitor context summary
       try {
-        const competitorResponse = await api.post('/api/hyperspell/query', {
+        const competitorResponse = await api.post('/api/memory/query', {
           query: 'competitors, competitive analysis, competitor information',
           max_results: 10
         })
@@ -316,7 +316,7 @@ function BrandContext() {
 
       // Market context summary
       try {
-        const marketResponse = await api.post('/api/hyperspell/query', {
+        const marketResponse = await api.post('/api/memory/query', {
           query: 'market trends, industry analysis, market research, target audience',
           max_results: 10
         })
@@ -383,7 +383,7 @@ function BrandContext() {
 
       // Overall summary - use get_all_memories_context endpoint if available, otherwise query with *
       try {
-        const overallResponse = await api.post('/api/hyperspell/query', {
+        const overallResponse = await api.post('/api/memory/query', {
           query: 'brand context, competitors, market trends, company information, business context',
           max_results: 20
         })
@@ -518,7 +518,7 @@ function BrandContext() {
         const hyperspellFormData = new FormData()
         hyperspellFormData.append('file', fileForHyperspell)
         
-        const hyperspellResponse = await api.post('/api/hyperspell/upload', hyperspellFormData, {
+        const memoryResponse = await api.post('/api/memory/upload', hyperspellFormData, {
           headers: {
             'Content-Type': 'multipart/form-data',
           },
@@ -612,7 +612,7 @@ function BrandContext() {
       const hyperspellFormData = new FormData()
       hyperspellFormData.append('file', fileForHyperspell)
       
-      const response = await api.post('/api/hyperspell/upload', hyperspellFormData, {
+      const response = await api.post('/api/memory/upload', hyperspellFormData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
@@ -690,7 +690,7 @@ function BrandContext() {
       const competitorsText = competitorsList.map(c => `- ${c}`).join('\n')
       const memoryText = `Competitors:\n${competitorsText}`
       
-      await api.post('/api/hyperspell/add-memory', {
+      await api.post('/api/memory/add-memory', {
         text: memoryText,
         collection: 'competitors'
       })
@@ -726,7 +726,7 @@ function BrandContext() {
           const memoryText = `Competitors found via AI analysis:\n${competitorsText}`
           
           try {
-            await api.post('/api/hyperspell/add-memory', {
+            await api.post('/api/memory/add-memory', {
               text: memoryText,
               collection: 'competitors'
             })

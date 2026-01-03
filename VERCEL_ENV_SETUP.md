@@ -69,3 +69,4 @@ After deployment, check the browser console:
 - `frontend/src/utils/auth.js` - Authentication utilities
 - `RENDER_ENV_VARIABLES_COMPLETE.md` - Backend environment variables
 
+

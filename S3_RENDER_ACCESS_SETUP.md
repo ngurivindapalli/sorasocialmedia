@@ -3,29 +3,32 @@
 ## 🎯 Goal
 Grant Render backend access to your S3 bucket: `x-video-hook-mem0-20251228193510`
 
+## ⚠️ Important: Separate AWS Accounts
+
+**If you're using `noel-bedrock-user` for Bedrock (managed by someone else), you need to create a separate IAM user in YOUR OWN AWS account for S3 access.**
+
+This guide assumes:
+- ✅ **Bedrock access:** Uses `noel-bedrock-user` (managed by someone else) - **DO NOT use these credentials for S3**
+- ✅ **S3 access:** You'll create a new IAM user in **YOUR OWN AWS account** for S3 bucket access
+
 ## 📋 Step-by-Step Instructions
 
-### Step 1: Go to AWS IAM Console
+### Step 1: Log into YOUR AWS Account
 
-1. Visit: https://console.aws.amazon.com/iam/
-2. Make sure you're in the correct AWS account
-3. Click **Users** in the left sidebar
+1. Visit: https://console.aws.amazon.com/
+2. **Log in with YOUR AWS account** (the one that owns/manages the S3 bucket)
+3. Make sure you're in the correct AWS account (not the Bedrock account)
+4. Go to: https://console.aws.amazon.com/iam/
+5. Click **Users** in the left sidebar
 
-### Step 2: Create or Use Existing IAM User
+### Step 2: Create New IAM User for S3 Access
 
-**Option A: Create New IAM User (Recommended)**
+**⚠️ DO NOT use `noel-bedrock-user` - that's for Bedrock only and managed by someone else.**
 
 1. Click **Create user**
-2. **User name:** `render-s3-access` (or any name you prefer)
+2. **User name:** `render-s3-access` (or any name you prefer, e.g., `s3-memory-storage`)
 3. **Access type:** Select **"Access key - Programmatic access"**
 4. Click **Next: Permissions**
-
-**Option B: Use Existing User**
-
-1. Find your existing IAM user (the one with `AWS_ACCESS_KEY_ID` you're using)
-2. Click on the user name
-3. Go to **Permissions** tab
-4. Skip to Step 3
 
 ### Step 3: Create IAM Policy for S3 Access
 
@@ -46,8 +49,11 @@ Grant Render backend access to your S3 bucket: `x-video-hook-mem0-20251228193510
                 "s3:GetObject",
                 "s3:DeleteObject",
                 "s3:ListBucket",
-                "s3:HeadBucket",
-                "s3:HeadObject"
+                "s3:ListBucketMultipartUploads",
+                "s3:ListMultipartUploadParts",
+                "s3:AbortMultipartUpload",
+                "s3:GetBucketLocation",
+                "s3:GetObjectVersion"
             ],
             "Resource": [
                 "arn:aws:s3:::x-video-hook-mem0-20251228193510",
@@ -94,15 +100,19 @@ Grant Render backend access to your S3 bucket: `x-video-hook-mem0-20251228193510
 
 ### Step 6: Update Render Environment Variables
 
+**⚠️ IMPORTANT: Use the NEW S3 credentials, NOT the Bedrock credentials!**
+
 1. Go to **Render Dashboard** → Your Backend Service → **Environment**
-2. Update or add these variables:
+2. Update or add these variables with your **NEW S3 IAM user credentials**:
 
 ```
-AWS_ACCESS_KEY_ID=your-access-key-id-here
-AWS_SECRET_ACCESS_KEY=your-secret-access-key-here
+AWS_ACCESS_KEY_ID=your-new-s3-access-key-id-here
+AWS_SECRET_ACCESS_KEY=your-new-s3-secret-access-key-here
 AWS_S3_BUCKET=x-video-hook-mem0-20251228193510
 AWS_REGION=us-east-1
 ```
+
+**Note:** These are DIFFERENT from any Bedrock credentials you might have. The S3 credentials are for YOUR AWS account, not the Bedrock account.
 
 3. Click **Save Changes**
 4. Render will automatically redeploy
@@ -139,11 +149,9 @@ After Render redeploys, check the logs for:
 
 The policy above only grants:
 - ✅ `s3:PutObject` - Upload files
-- ✅ `s3:GetObject` - Download files
+- ✅ `s3:GetObject` - Download files (also covers HeadObject operations)
 - ✅ `s3:DeleteObject` - Delete files
-- ✅ `s3:ListBucket` - List files in bucket
-- ✅ `s3:HeadBucket` - Check if bucket exists
-- ✅ `s3:HeadObject` - Get file metadata
+- ✅ `s3:ListBucket` - List files in bucket (also covers HeadBucket operations)
 
 **No other AWS services are accessible** - this is secure!
 
@@ -162,9 +170,7 @@ If you want even more security, you can restrict to specific prefixes:
                 "s3:PutObject",
                 "s3:GetObject",
                 "s3:DeleteObject",
-                "s3:ListBucket",
-                "s3:HeadBucket",
-                "s3:HeadObject"
+                "s3:ListBucket"
             ],
             "Resource": [
                 "arn:aws:s3:::x-video-hook-mem0-20251228193510",
@@ -181,16 +187,21 @@ If you want even more security, you can restrict to specific prefixes:
 ### Error: "Access denied to bucket"
 
 **Possible causes:**
-1. IAM policy not attached to user
-2. Wrong bucket name
-3. Wrong region
-4. Access keys not updated in Render
+1. Using Bedrock credentials instead of S3 credentials
+2. IAM policy not attached to user
+3. Wrong bucket name
+4. Wrong region
+5. Access keys not updated in Render
+6. Logged into wrong AWS account
 
 **Fix:**
-1. Verify policy is attached: IAM → Users → Your User → Permissions
-2. Check bucket name matches exactly (case-sensitive)
-3. Verify region is `us-east-1`
-4. Update Render environment variables with correct keys
+1. **Verify you're using S3 credentials, NOT Bedrock credentials** in Render
+2. Make sure you're logged into YOUR AWS account (the one with the S3 bucket)
+3. Verify policy is attached: IAM → Users → Your S3 User → Permissions
+4. Check bucket name matches exactly (case-sensitive)
+5. Verify region is `us-east-1`
+6. Update Render environment variables with the NEW S3 user's access keys
+7. Ensure the S3 bucket exists in YOUR AWS account, not the Bedrock account
 
 ### Error: "Bucket not found"
 
@@ -208,15 +219,16 @@ If you want even more security, you can restrict to specific prefixes:
 
 ## 📝 Quick Checklist
 
-- [ ] IAM user created (or existing user identified)
+- [ ] Logged into YOUR AWS account (not the Bedrock account)
+- [ ] New IAM user created for S3 access (e.g., `render-s3-access`)
 - [ ] IAM policy created with S3 permissions
-- [ ] Policy attached to IAM user
-- [ ] Access keys created/copied
-- [ ] S3 bucket exists: `x-video-hook-mem0-20251228193510`
+- [ ] Policy attached to the NEW S3 IAM user
+- [ ] Access keys created/copied for the NEW S3 IAM user
+- [ ] S3 bucket exists in YOUR AWS account: `x-video-hook-mem0-20251228193510`
 - [ ] Bucket region: `us-east-1`
-- [ ] Environment variables set in Render:
-  - [ ] `AWS_ACCESS_KEY_ID`
-  - [ ] `AWS_SECRET_ACCESS_KEY`
+- [ ] Environment variables set in Render with NEW S3 credentials:
+  - [ ] `AWS_ACCESS_KEY_ID` (from NEW S3 user, NOT Bedrock user)
+  - [ ] `AWS_SECRET_ACCESS_KEY` (from NEW S3 user, NOT Bedrock user)
   - [ ] `AWS_S3_BUCKET=x-video-hook-mem0-20251228193510`
   - [ ] `AWS_REGION=us-east-1`
 - [ ] Render service redeployed
@@ -238,4 +250,5 @@ After setup, you should see in Render logs:
 - [AWS IAM User Guide](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_users.html)
 - [S3 Bucket Policies](https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucket-policies.html)
 - [IAM Policy Examples](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_examples.html)
+
 

@@ -187,3 +187,5 @@ python verify_bedrock_permissions.py
 - **IAM Policies**: https://console.aws.amazon.com/iam/home#/policies
 
 
+
+
