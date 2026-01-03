@@ -15,17 +15,35 @@ class BedrockService:
     """Service for AWS Bedrock Claude text generation"""
     
     def __init__(self):
-        """Initialize Bedrock service with AWS credentials"""
+        """Initialize Bedrock service with AWS credentials
+        
+        Supports separate Bedrock credentials via BEDROCK_AWS_ACCESS_KEY_ID and BEDROCK_AWS_SECRET_ACCESS_KEY.
+        Falls back to regular AWS credentials if Bedrock-specific ones are not set.
+        """
         self.available = False
         self.bedrock_runtime = None
         
-        # Get AWS credentials from environment
-        aws_access_key = os.getenv('AWS_ACCESS_KEY_ID')
-        aws_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
-        aws_region = os.getenv('AWS_REGION', 'us-east-1')
+        # Check for separate Bedrock credentials first (preferred)
+        bedrock_access_key = os.getenv('BEDROCK_AWS_ACCESS_KEY_ID')
+        bedrock_secret_key = os.getenv('BEDROCK_AWS_SECRET_ACCESS_KEY')
+        bedrock_region = os.getenv('BEDROCK_AWS_REGION')
+        
+        # Fall back to regular AWS credentials if Bedrock-specific ones are not set
+        if bedrock_access_key and bedrock_secret_key:
+            aws_access_key = bedrock_access_key
+            aws_secret_key = bedrock_secret_key
+            aws_region = bedrock_region or os.getenv('AWS_REGION', 'us-east-1')
+            print("[Bedrock] Using separate Bedrock AWS credentials (BEDROCK_AWS_ACCESS_KEY_ID)")
+        else:
+            # Use regular AWS credentials (for S3, etc.)
+            aws_access_key = os.getenv('AWS_ACCESS_KEY_ID')
+            aws_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+            aws_region = os.getenv('AWS_REGION', 'us-east-1')
+            if aws_access_key and aws_secret_key:
+                print("[Bedrock] Using regular AWS credentials (AWS_ACCESS_KEY_ID)")
         
         if not aws_access_key or not aws_secret_key:
-            print("[Bedrock] AWS credentials not found. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables.")
+            print("[Bedrock] AWS credentials not found. Set BEDROCK_AWS_ACCESS_KEY_ID/BEDROCK_AWS_SECRET_ACCESS_KEY or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY environment variables.")
             return
         
         try:
