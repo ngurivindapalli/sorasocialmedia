@@ -1,6 +1,6 @@
 /**
- * useHyperspell - React hook for integrating Hyperspell memory context
- * Can be used in any component to get Hyperspell context for queries
+ * useMemory - React hook for integrating memory context (S3 + Mem0)
+ * Replaces useHyperspell - uses MemoryService directly
  */
 import { useState, useCallback } from 'react'
 import { api } from '../utils/api'
@@ -11,9 +11,9 @@ export function useHyperspell() {
   const [error, setError] = useState(null)
 
   /**
-   * Query Hyperspell for relevant memory context
+   * Query memory layer for relevant context
    * @param {string} query - The query to search memories
-   * @returns {Promise<string>} - Context string from Hyperspell
+   * @returns {Promise<string>} - Context string from memory
    */
   const getContext = useCallback(async (query) => {
     if (!query || !query.trim()) {
@@ -24,7 +24,7 @@ export function useHyperspell() {
     setError(null)
 
     try {
-      const response = await api.post('/api/hyperspell/query', {
+      const response = await api.post('/api/memory/query', {
         query: query.trim(),
         max_results: 5
       })
@@ -56,7 +56,7 @@ export function useHyperspell() {
   }, [])
 
   /**
-   * Add a text memory to Hyperspell
+   * Add a text memory to memory layer
    * @param {string} text - Text to store
    * @param {string} collection - Optional collection name
    * @returns {Promise<boolean>} - Success status
@@ -71,7 +71,7 @@ export function useHyperspell() {
     setError(null)
 
     try {
-      const response = await api.post('/api/hyperspell/add-memory', {
+      const response = await api.post('/api/memory/add-memory', {
         text: text.trim(),
         collection: collection.trim() || 'user_memories'
       })
@@ -98,12 +98,12 @@ export function useHyperspell() {
   }, [])
 
   /**
-   * Check if Hyperspell is available
+   * Check if memory service is available
    * @returns {Promise<boolean>}
    */
   const checkAvailability = useCallback(async () => {
     try {
-      const response = await api.get('/api/hyperspell/status')
+      const response = await api.get('/api/memory/status')
       return response.data.available === true
     } catch (err) {
       return false

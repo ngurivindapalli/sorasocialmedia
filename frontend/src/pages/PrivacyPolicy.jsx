@@ -67,7 +67,7 @@ function PrivacyPolicy() {
               We use third-party services to help us operate our Service, including but not limited to:
             </p>
             <ul className="list-disc list-inside text-[#4b5563] space-y-2 ml-4 mt-3">
-              <li><strong>AI Services:</strong> OpenAI, Google Cloud (Imagen, Veo), and Hyperspell for content generation and memory storage</li>
+              <li><strong>AI Services:</strong> OpenAI, Google Cloud (Imagen, Veo), and Memory Service (S3 + Mem0) for content generation and memory storage</li>
               <li><strong>Hosting:</strong> Vercel for frontend hosting and Render for backend services</li>
               <li><strong>Integrations:</strong> Notion and Google Drive for content import</li>
             </ul>

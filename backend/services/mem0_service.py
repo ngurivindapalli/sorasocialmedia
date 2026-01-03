@@ -249,7 +249,7 @@ class Mem0Service:
             return None
         
         # Normalize user_id for consistency (Mem0 uses agent_id)
-        normalized_user_id = user_id.lower().strip()
+        normalized_user_id = self._normalize_user_id(user_id)
         
         try:
             def search_sync():
@@ -321,7 +321,7 @@ class Mem0Service:
             return ""
         
         # Normalize user_id for consistency
-        normalized_user_id = user_id.lower().strip()
+        normalized_user_id = self._normalize_user_id(user_id)
         
         try:
             # Strategy: Use multiple semantic queries to get diverse memories

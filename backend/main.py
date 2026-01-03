@@ -6088,7 +6088,274 @@ async def get_preferred_settings():
 
 # ==================== HYPERSPELL ENDPOINTS ====================
 
-# Hyperspell endpoints removed - using MemoryService (S3 + Mem0) directly
+# Memory endpoints - using MemoryService (S3 + Mem0) directly
+
+@app.post("/api/memory/query")
+async def query_memories(
+    query: dict,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Query memory layer for relevant context.
+    
+    Request body:
+    {
+        "query": "What is the project deadline?",
+        "max_results": 5
+    }
+    """
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        if not memory_service.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Memory service is not available. Please check S3 and Mem0 configuration."
+            )
+        
+        # Normalize user_id consistently
+        user_id = normalize_user_id(current_user)
+        query_text = query.get("query", "")
+        max_results = query.get("max_results", 5)
+        
+        if not query_text:
+            raise HTTPException(status_code=400, detail="Query text is required")
+        
+        result = await memory_service.query_memories(user_id, query_text, max_results)
+        
+        if result is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to query memories. Please ensure memories are stored."
+            )
+        
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error querying memories: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/memory/upload")
+async def upload_to_memory(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Upload a document to memory layer.
+    Supported formats: PDF, DOCX, TXT, etc.
+    """
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        if not memory_service.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Memory service is not available. Please check S3 and Mem0 configuration."
+            )
+        
+        # Normalize user_id consistently
+        user_id = normalize_user_id(current_user)
+        print(f"[API] Uploading document to Memory (S3 + Mem0) for user: {user_id}")
+        
+        # Save uploaded file temporarily
+        import tempfile
+        import os
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp_file:
+            content = await file.read()
+            tmp_file.write(content)
+            tmp_path = tmp_file.name
+        
+        try:
+            # Extract text from document first (for PDFs, DOCX, etc.)
+            file_ext = os.path.splitext(file.filename)[1].lower()
+            text_content = None
+            
+            # For PDF, DOCX, DOC, TXT - extract text and save as text memory
+            if file_ext in ('.pdf', '.docx', '.doc', '.txt', '.md'):
+                try:
+                    text_content = await document_service.extract_text(tmp_path, file.content_type or '')
+                    print(f"[API] Extracted {len(text_content)} characters from {file.filename}")
+                except Exception as e:
+                    print(f"[API] Warning: Failed to extract text from {file.filename}: {e}")
+            
+            # If we have extracted text, append it to unified brand context memory
+            if text_content and len(text_content.strip()) > 0:
+                print(f"[API] Appending document to unified brand context memory")
+                document_content = f"Document: {file.filename}\n\n{text_content}"
+                result = await memory_service.append_to_unified_brand_context(
+                    user_id=user_id,
+                    new_content=document_content,
+                    content_type="document"
+                )
+                
+                if result is None:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to save document to unified brand context."
+                    )
+                
+                resource_id = result.get("resource_id")
+                if not resource_id:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to save document: Invalid resource_id returned."
+                    )
+                
+                return {
+                    "success": True,
+                    "resource_id": resource_id,
+                    "filename": file.filename,
+                    "message": "Document added to unified brand context successfully",
+                    "context_updated": True,
+                    "verified": True
+                }
+            else:
+                # Fallback: Upload binary file to S3
+                print(f"[API] Uploading binary file to S3 (text extraction not available)")
+                result = await memory_service.upload_document(
+                    user_id=user_id,
+                    file_path=tmp_path,
+                    filename=file.filename
+                )
+                
+                if result is None:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to upload document."
+                    )
+                
+                return {
+                    "success": True,
+                    "resource_id": result.get("resource_id"),
+                    "filename": result.get("filename"),
+                    "message": "Document uploaded successfully to memory layer",
+                    "verified": True
+                }
+        finally:
+            # Clean up temporary file
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error uploading to memory: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/memory/add-memory")
+async def add_memory(
+    request: dict,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Add a text memory to memory layer.
+    For brand context related content (competitors, brand info, etc.), uses unified brand context.
+    For other content, uses regular memory storage.
+    
+    Request body:
+    {
+        "text": "Your memory text here...",
+        "collection": "optional_collection_name"
+    }
+    """
+    try:
+        if not memory_service.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Memory service is not available. Please check S3 and Mem0 configuration."
+            )
+        
+        text = request.get("text", "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="Text is required")
+        
+        collection = request.get("collection", "user_memories")
+        # Normalize user_id consistently
+        user_id = normalize_user_id(current_user) if current_user else "anonymous"
+        
+        # Brand context related collections should use unified brand context
+        brand_context_collections = ["competitors", "brand_context", "brand", "documents", "company", "market"]
+        use_unified = collection.lower() in [c.lower() for c in brand_context_collections]
+        
+        if use_unified:
+            print(f"[API] Adding to unified brand context for user: {user_id} (collection: {collection})")
+            result = await memory_service.append_to_unified_brand_context(
+                user_id=user_id,
+                new_content=text,
+                content_type=collection
+            )
+            message = "Content added to unified brand context successfully"
+        else:
+            print(f"[API] Adding text memory for user: {user_id} (collection: {collection})")
+            result = await memory_service.add_text_memory(
+                user_id=user_id,
+                text=text,
+                collection=collection
+            )
+            message = "Memory added successfully"
+        
+        if result is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to add memory."
+            )
+        
+        resource_id = result.get("resource_id")
+        if not resource_id:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to add memory: Invalid resource_id returned."
+            )
+        
+        return {
+            "success": True,
+            "resource_id": resource_id,
+            "message": message,
+            "text_preview": text[:100] + "..." if len(text) > 100 else text,
+            "collection": collection,
+            "context_updated": use_unified,
+            "verified": True
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error adding memory: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to add memory: {str(e)}")
+
+
+@app.get("/api/memory/status")
+async def get_memory_status():
+    """
+    Check memory service status and availability.
+    Public endpoint - no authentication required.
+    """
+    try:
+        available = memory_service.is_available()
+        s3_available = memory_service.s3_service.is_available() if hasattr(memory_service, 's3_service') else False
+        mem0_available = memory_service.mem0_service.is_available() if hasattr(memory_service, 'mem0_service') else False
+        
+        return {
+            "available": available,
+            "s3_available": s3_available,
+            "mem0_available": mem0_available,
+            "message": "Memory service is available" if available else "Memory service is not configured. Check S3 and Mem0 configuration."
+        }
+    except Exception as e:
+        print(f"[API] Error checking memory status: {str(e)}")
+        return {
+            "available": False,
+            "message": f"Error checking status: {str(e)}"
+        }
+
 
 @app.post("/api/memory/summaries")
 async def get_context_summaries(

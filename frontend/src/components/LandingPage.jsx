@@ -667,7 +667,7 @@ function TechnologySection() {
               <span className="px-4 py-2 bg-[#1e293b] border border-[#1e293b] rounded-lg text-sm text-white transition-all duration-300 hover:scale-105">Veo 3.1</span>
               <span className="px-4 py-2 bg-[#1e293b] border border-[#1e293b] rounded-lg text-sm text-white transition-all duration-300 hover:scale-105">Whisper</span>
               <span className="px-4 py-2 bg-[#1e293b] border border-[#1e293b] rounded-lg text-sm text-white transition-all duration-300 hover:scale-105">Imagen</span>
-              <span className="px-4 py-2 bg-[#1e293b] border border-[#1e293b] rounded-lg text-sm text-white transition-all duration-300 hover:scale-105">Hyperspell</span>
+              <span className="px-4 py-2 bg-[#1e293b] border border-[#1e293b] rounded-lg text-sm text-white transition-all duration-300 hover:scale-105">Memory (S3 + Mem0)</span>
             </div>
           </div>
           <div 
@@ -1163,7 +1163,7 @@ function LandingPage() {
               <Link to="/privacy-policy" className="text-[#1e293b] hover:underline">Privacy Policy</Link>
             </div>
             <div className="text-center md:text-right">
-              <div>Powered by GPT-4, Whisper, Google Imagen, Veo 3.1, and Hyperspell</div>
+              <div>Powered by GPT-4, Whisper, Google Imagen, Veo 3.1, and Memory (S3 + Mem0)</div>
               <div className="mt-1">© 2025 Aigis Marketing</div>
             </div>
           </div>
