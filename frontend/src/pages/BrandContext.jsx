@@ -644,20 +644,20 @@ function BrandContext() {
       setUploadedDocName('')
       setUploadedDocId(null)
       
-      // Reload summaries after adding document (wait a moment for Hyperspell to process)
+      // Reload summaries after adding document (wait a moment for memory to process)
       setTimeout(async () => {
         await loadSummaries()
       }, 2000)
       
       // Show success notification
       const successMessage = verified 
-        ? `Document "${uploadedDocName}" saved and verified in Hyperspell!`
+        ? `Document "${uploadedDocName}" saved and verified in memory!`
         : `Document "${uploadedDocName}" saved (verification pending)`
       setUploadSuccess(successMessage)
       setTimeout(() => setUploadSuccess(''), 5000)
     } catch (err) {
       console.error('Failed to send document:', err)
-      setError(err.response?.data?.detail || 'Failed to send document to Hyperspell')
+      setError(err.response?.data?.detail || 'Failed to send document to memory')
     } finally {
       setSendingDoc(false)
     }
