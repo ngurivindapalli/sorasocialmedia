@@ -47,8 +47,8 @@ export function useHyperspell() {
 
       return ''
     } catch (err) {
-      console.error('[Hyperspell] Error querying memories:', err)
-      setError(err.message || 'Failed to query Hyperspell memories')
+      console.error('[Memory] Error querying memories:', err)
+      setError(err.message || 'Failed to query memories')
       return '' // Return empty on error - don't block functionality
     } finally {
       setLoading(false)
@@ -78,7 +78,7 @@ export function useHyperspell() {
 
       return response.data.success === true
     } catch (err) {
-      console.error('[Hyperspell] Error adding memory:', err)
+      console.error('[Memory] Error adding memory:', err)
       
       let errorMessage = 'Failed to add memory'
       if (err.response?.data) {

@@ -172,7 +172,7 @@ function BrandContext() {
         console.log('[BrandContext] Brand response:', brandResponse.data)
         
         let content = ''
-        // Prioritize answer field - it contains the actual summarized content from Hyperspell
+        // Prioritize answer field - it contains the actual summarized content from memory
         if (brandResponse.data?.answer && String(brandResponse.data.answer).trim().length > 20) {
           content = String(brandResponse.data.answer).trim()
           console.log('[BrandContext] Using answer field for brand context:', content.substring(0, 100))
@@ -511,32 +511,32 @@ function BrandContext() {
       setUploadedDocId(documentId)
       console.log('[BrandContext] Document uploaded locally:', documentId)
       
-      // Step 2: Immediately save to Hyperspell (user's specific memory account)
+      // Step 2: Immediately save to memory (user's specific memory account)
       setSendingDoc(true)
       try {
-        const fileForHyperspell = new File([fileBlob], file.name, { type: file.type })
-        const hyperspellFormData = new FormData()
-        hyperspellFormData.append('file', fileForHyperspell)
+        const fileForMemory = new File([fileBlob], file.name, { type: file.type })
+        const memoryFormData = new FormData()
+        memoryFormData.append('file', fileForMemory)
         
-        const memoryResponse = await api.post('/api/memory/upload', hyperspellFormData, {
+        const memoryResponse = await api.post('/api/memory/upload', memoryFormData, {
           headers: {
             'Content-Type': 'multipart/form-data',
           },
         })
         
         // Verify response has resource_id and verified flag
-        if (!hyperspellResponse.data?.resource_id) {
-          throw new Error('Failed to save document to Hyperspell: No resource_id returned')
+        if (!memoryResponse.data?.resource_id) {
+          throw new Error('Failed to save document to memory: No resource_id returned')
         }
         
-        const verified = hyperspellResponse.data?.verified !== false // Default to true if not specified
-        const resourceId = hyperspellResponse.data.resource_id
+        const verified = memoryResponse.data?.verified !== false // Default to true if not specified
+        const resourceId = memoryResponse.data.resource_id
         
         if (!verified) {
           console.warn('[BrandContext] Document saved but verification incomplete. Resource ID:', resourceId)
         }
         
-        console.log('[BrandContext] Document saved to Hyperspell:', resourceId, verified ? '(verified)' : '(verification pending)')
+        console.log('[BrandContext] Document saved to memory:', resourceId, verified ? '(verified)' : '(verification pending)')
         
         // Save filename before clearing state
         const fileName = uploadedDocName || file.name
@@ -569,22 +569,22 @@ function BrandContext() {
           setUploadSuccess('')
         }, 5000)
         
-        // Reload summaries after adding document (wait a moment for Hyperspell to process)
+        // Reload summaries after adding document (wait a moment for memory to process)
         setTimeout(async () => {
           await loadSummaries()
         }, 2000)
         
         console.log('[BrandContext] Document successfully saved to unified brand context and removed from upload state')
-      } catch (hyperspellErr) {
-        console.error('Failed to save document to Hyperspell:', hyperspellErr)
+      } catch (memoryErr) {
+        console.error('Failed to save document to memory:', memoryErr)
         // Keep the document in state so user can retry
         setUploadedDoc(file)
         setUploadedDocName(file.name)
         setUploadedDocId(documentId)
-        const errorMsg = hyperspellErr.response?.data?.detail || hyperspellErr.message || 'Failed to save document to Hyperspell. The document is still available - please try uploading again.'
+        const errorMsg = memoryErr.response?.data?.detail || memoryErr.message || 'Failed to save document to memory. The document is still available - please try uploading again.'
         setError(errorMsg)
         setUploadSuccess('') // Clear any success message
-        throw hyperspellErr
+        throw memoryErr
       } finally {
         setSendingDoc(false)
       }
@@ -607,12 +607,12 @@ function BrandContext() {
       
       const fileBuffer = await uploadedDoc.arrayBuffer()
       const fileBlob = new Blob([fileBuffer], { type: uploadedDoc.type })
-      const fileForHyperspell = new File([fileBlob], uploadedDoc.name, { type: uploadedDoc.type })
+      const fileForMemory = new File([fileBlob], uploadedDoc.name, { type: uploadedDoc.type })
       
-      const hyperspellFormData = new FormData()
-      hyperspellFormData.append('file', fileForHyperspell)
+      const memoryFormData = new FormData()
+      memoryFormData.append('file', fileForMemory)
       
-      const response = await api.post('/api/memory/upload', hyperspellFormData, {
+      const response = await api.post('/api/memory/upload', memoryFormData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
@@ -620,7 +620,7 @@ function BrandContext() {
       
       // Verify response has resource_id
       if (!response.data?.resource_id) {
-        throw new Error('Failed to save document to Hyperspell: No resource_id returned')
+        throw new Error('Failed to save document to memory: No resource_id returned')
       }
       
       const verified = response.data?.verified !== false // Default to true if not specified
@@ -675,15 +675,15 @@ function BrandContext() {
         setNewCompetitor('')
       }
       
-      await saveCompetitorsToHyperspell(updated)
-      // Reload summaries after adding competitor (wait a moment for Hyperspell to process)
+      await saveCompetitorsToMemory(updated)
+      // Reload summaries after adding competitor (wait a moment for memory to process)
       setTimeout(async () => {
         await loadSummaries()
       }, 2000)
     }
   }
 
-  const saveCompetitorsToHyperspell = async (competitorsList) => {
+  const saveCompetitorsToMemory = async (competitorsList) => {
     if (competitorsList.length === 0) return
     
     try {
@@ -695,7 +695,7 @@ function BrandContext() {
         collection: 'competitors'
       })
     } catch (err) {
-      console.error('Failed to save competitors to Hyperspell:', err)
+      console.error('Failed to save competitors to memory:', err)
     }
   }
 
@@ -730,9 +730,9 @@ function BrandContext() {
               text: memoryText,
               collection: 'competitors'
             })
-            console.log('[BrandContext] Saved found competitors to Hyperspell')
+            console.log('[BrandContext] Saved found competitors to memory')
           } catch (err) {
-            console.error('Failed to save found competitors to Hyperspell:', err)
+            console.error('Failed to save found competitors to memory:', err)
           }
         }
       } else {
@@ -964,7 +964,7 @@ function BrandContext() {
                   <FileText className="w-5 h-5 text-[#1e293b]" />
                   <span className="text-sm text-[#111827] font-medium">{uploadedDocName}</span>
                   {sendingDoc && (
-                    <span className="text-xs text-[#6b7280] ml-2">Saving to Hyperspell...</span>
+                    <span className="text-xs text-[#6b7280] ml-2">Saving to memory...</span>
                   )}
                 </div>
                 <button
@@ -982,7 +982,7 @@ function BrandContext() {
               {sendingDoc && (
                 <div className="flex items-center justify-center gap-2 text-sm text-[#4b5563]">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Automatically saving to Hyperspell...</span>
+                  <span>Automatically saving to memory...</span>
                 </div>
               )}
             </div>
@@ -1047,7 +1047,7 @@ function BrandContext() {
                         const updated = competitors.filter(c => c !== competitor)
                         setCompetitors(updated)
                         localStorage.setItem('videohook_competitors', JSON.stringify(updated))
-                        saveCompetitorsToHyperspell(updated)
+                        saveCompetitorsToMemory(updated)
                         loadSummaries()
                       }}
                       className="text-[#4b5563] hover:text-[#dc2626] transition-colors"
