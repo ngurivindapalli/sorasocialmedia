@@ -2187,7 +2187,13 @@ async def integration_callback(
         elif platform == "google_drive":
             token_data = await google_drive_service.exchange_code_for_token(code)
             if not token_data:
-                raise HTTPException(status_code=400, detail="Failed to exchange code for token")
+                # Get more detailed error information
+                error_detail = "Failed to exchange code for token. Common causes: redirect_uri mismatch, invalid client credentials, or code already used/expired."
+                print(f"[API] Google Drive OAuth error: {error_detail}")
+                print(f"[API] Redirect URI configured: {google_drive_service.redirect_uri}")
+                print(f"[API] Client ID set: {bool(google_drive_service.client_id)}")
+                print(f"[API] Client Secret set: {bool(google_drive_service.client_secret)}")
+                raise HTTPException(status_code=400, detail=f"400: {error_detail}. Check that GOOGLE_DRIVE_REDIRECT_URI matches exactly in Google Cloud Console and environment variables.")
             
             access_token = token_data.get("access_token")
             refresh_token = token_data.get("refresh_token")
@@ -2600,7 +2606,7 @@ async def import_content(
                     # Append to unified brand context (same as uploaded files)
                     document_content = f"Notion Page: {page_name}\n\n{processed_content}"
                     result = await memory_service.append_to_unified_brand_context(
-                        user_id=user_id,
+                            user_id=user_id,
                         new_content=document_content,
                         content_type="notion_page"
                     )
@@ -2700,7 +2706,7 @@ async def import_content(
                     # Append to unified brand context (same as uploaded files)
                     document_content = f"Google Drive File: {file_name}\n\n{enhanced_content}"
                     result = await memory_service.append_to_unified_brand_context(
-                        user_id=user_id,
+                            user_id=user_id,
                         new_content=document_content,
                         content_type="google_drive_file"
                     )
@@ -2758,7 +2764,7 @@ async def import_content(
                         # Append to unified brand context (same as uploaded files)
                         document_content = f"Jira Issue: {issue_key}\n\n{processed_content}"
                         result = await memory_service.append_to_unified_brand_context(
-                            user_id=user_id,
+                                user_id=user_id,
                             new_content=document_content,
                             content_type="jira_issue"
                         )
@@ -6418,8 +6424,8 @@ async def upload_to_memory(
                         status_code=500,
                         detail="Failed to save document: Invalid resource_id returned."
                     )
-                
-                return {
+        
+        return {
                     "success": True,
                     "resource_id": resource_id,
                     "filename": file.filename,

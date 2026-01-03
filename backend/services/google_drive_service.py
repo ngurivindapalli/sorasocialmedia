@@ -50,6 +50,18 @@ class GoogleDriveService:
     async def exchange_code_for_token(self, code: str) -> Optional[Dict]:
         """Exchange authorization code for access token"""
         try:
+            if not self.client_id or not self.client_secret:
+                print(f"[GoogleDrive] ERROR: Missing credentials - client_id: {bool(self.client_id)}, client_secret: {bool(self.client_secret)}")
+                return None
+            
+            if not self.redirect_uri:
+                print(f"[GoogleDrive] ERROR: Missing redirect_uri")
+                return None
+            
+            print(f"[GoogleDrive] Exchanging code for token...")
+            print(f"[GoogleDrive] Redirect URI: {self.redirect_uri}")
+            print(f"[GoogleDrive] Client ID: {self.client_id[:20]}...")
+            
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{self.oauth_base_url}/token",
@@ -59,12 +71,39 @@ class GoogleDriveService:
                         "code": code,
                         "grant_type": "authorization_code",
                         "redirect_uri": self.redirect_uri
-                    }
+                    },
+                    timeout=30.0
                 )
+                
+                # Log response details for debugging
+                if response.status_code != 200:
+                    error_text = response.text
+                    print(f"[GoogleDrive] Token exchange failed with status {response.status_code}")
+                    print(f"[GoogleDrive] Error response: {error_text}")
+                    try:
+                        error_json = response.json()
+                        error_detail = error_json.get("error_description") or error_json.get("error", "Unknown error")
+                        print(f"[GoogleDrive] Error detail: {error_detail}")
+                    except:
+                        pass
+                
                 response.raise_for_status()
-                return response.json()
+                token_data = response.json()
+                print(f"[GoogleDrive] ✅ Token exchange successful")
+                return token_data
+        except httpx.HTTPStatusError as e:
+            error_detail = "Unknown error"
+            try:
+                error_json = e.response.json()
+                error_detail = error_json.get("error_description") or error_json.get("error", str(e))
+            except:
+                error_detail = e.response.text or str(e)
+            print(f"[GoogleDrive] HTTP error exchanging code: {e.response.status_code} - {error_detail}")
+            return None
         except Exception as e:
             print(f"[GoogleDrive] Error exchanging code: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     async def refresh_access_token(self, refresh_token: str) -> Optional[Dict]:
