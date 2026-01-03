@@ -2451,13 +2451,83 @@ async def list_jira_issues(
     ]
 
 
+async def process_content_with_claude(content: str, source_name: str, source_type: str = "document") -> str:
+    """
+    Process content with Claude to extract key information and enhance it for brand context.
+    Uses Claude (Bedrock or Anthropic API) to summarize and extract important details.
+    """
+    try:
+        # Create a prompt for Claude to process the content
+        system_message = f"""You are an expert at extracting and summarizing key information from {source_type} content for brand context.
+
+Your task is to:
+1. Extract key brand information (company details, products, services, values, mission)
+2. Identify important facts, statistics, and claims
+3. Summarize the content concisely while preserving critical details
+4. Structure the information clearly for use in brand context
+
+Return a well-structured summary that captures the essential information from the content."""
+
+        prompt = f"""Please process and summarize the following {source_type} content from {source_name}:
+
+{content[:8000]}  # Limit to 8000 chars to avoid token limits
+
+Extract and organize the key information that would be useful for brand context and marketing content generation."""
+
+        processed_content = None
+        
+        # Try Bedrock (Claude Sonnet 4.5) first
+        if bedrock_service and bedrock_service.is_available():
+            try:
+                sonnet_4_5_arn = "arn:aws:bedrock:us-east-1:222634391096:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+                print(f"[Integration] 🤖 Using AWS Bedrock (Claude Sonnet 4.5) to process {source_type} from {source_name}...")
+                processed_content = await bedrock_service.generate_text(
+                    prompt=prompt,
+                    system_message=system_message,
+                    max_tokens=2000,
+                    temperature=0.3,  # Lower temperature for more factual extraction
+                    model=sonnet_4_5_arn,
+                    use_converse_api=True
+                )
+                if processed_content:
+                    print(f"[Integration] ✅ Content processed with Claude Sonnet 4.5 ({len(processed_content)} chars)")
+                    return processed_content
+            except Exception as bedrock_error:
+                print(f"[Integration] ⚠️ AWS Bedrock failed, trying Anthropic Claude API: {bedrock_error}")
+        
+        # Fallback to Anthropic Claude API
+        if not processed_content and openai_service and openai_service.claude_available:
+            try:
+                print(f"[Integration] 🤖 Using Anthropic Claude API to process {source_type} from {source_name}...")
+                processed_content = await openai_service.generate_text_with_claude(
+                    prompt=prompt,
+                    system_message=system_message,
+                    max_tokens=2000,
+                    temperature=0.3
+                )
+                if processed_content:
+                    print(f"[Integration] ✅ Content processed with Claude API ({len(processed_content)} chars)")
+                    return processed_content
+            except Exception as claude_error:
+                print(f"[Integration] ⚠️ Anthropic Claude API failed, using original content: {claude_error}")
+        
+        # If Claude processing fails, return original content with a note
+        print(f"[Integration] ℹ️ Claude processing not available, using original content")
+        return f"[Content from {source_name}]\n\n{content}"
+        
+    except Exception as e:
+        print(f"[Integration] Error processing content with Claude: {e}")
+        # Return original content if processing fails
+        return f"[Content from {source_name}]\n\n{content}"
+
+
 @app.post("/api/integrations/import")
 async def import_content(
     request: ImportContentRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Import content from Notion, Google Drive, or Jira to Hyperspell"""
+    """Import content from Notion, Google Drive, or Jira to unified brand context (same as uploaded files)"""
     connection = db.query(IntegrationConnection).filter(
         IntegrationConnection.id == request.integration_id,
         IntegrationConnection.user_id == current_user.id,
@@ -2474,7 +2544,7 @@ async def import_content(
     if platform == "notion" and not connection and not notion_service.internal_token:
         raise HTTPException(status_code=404, detail="Notion not connected and no internal token configured")
     
-    user_id = current_user.email.lower().strip()
+    user_id = normalize_user_id(current_user)
     imported_items = []
     errors = []
     
@@ -2484,18 +2554,71 @@ async def import_content(
             access_token = connection.access_token if connection else None
             for page_id in request.item_ids:
                 try:
-                    content = await notion_service.get_page_content(access_token, page_id)
-                    if content:
-                        # Upload to Hyperspell
-                        memory_id = await memory_service.add_text_memory(
-                            user_id=user_id,
-                            text=content,
-                            collection=request.collection or "documents"
-                        )
-                        imported_items.append({"id": page_id, "memory_id": memory_id})
-                    else:
+                    # Get page content
+                    raw_content = await notion_service.get_page_content(access_token, page_id)
+                    if not raw_content:
                         errors.append({"id": page_id, "error": "Failed to fetch content"})
+                        continue
+                    
+                    # Get page title/name for context
+                    page_name = f"Notion Page {page_id}"
+                    try:
+                        # Try to get page title from Notion API
+                        import httpx
+                        async with httpx.AsyncClient() as client:
+                            token = notion_service.get_token(access_token)
+                            if token:
+                                page_response = await client.get(
+                                    f"https://api.notion.com/v1/pages/{page_id}",
+                                    headers={
+                                        "Authorization": f"Bearer {token}",
+                                        "Notion-Version": "2022-06-28"
+                                    }
+                                )
+                                if page_response.status_code == 200:
+                                    page_data = page_response.json()
+                                    # Extract title from page properties
+                                    properties = page_data.get("properties", {})
+                                    for prop_name, prop_data in properties.items():
+                                        if prop_data.get("type") == "title":
+                                            title_array = prop_data.get("title", [])
+                                            if title_array:
+                                                page_name = "".join([item.get("plain_text", "") for item in title_array])
+                                                break
+                    except Exception as title_error:
+                        print(f"[Integration] Could not get Notion page title: {title_error}")
+                        # Use default page_name
+                    
+                    # Process content with Claude to extract key information
+                    print(f"[Integration] Processing Notion page '{page_name}' with Claude...")
+                    processed_content = await process_content_with_claude(
+                        content=raw_content,
+                        source_name=page_name,
+                        source_type="notion page"
+                    )
+                    
+                    # Append to unified brand context (same as uploaded files)
+                    document_content = f"Notion Page: {page_name}\n\n{processed_content}"
+                    result = await memory_service.append_to_unified_brand_context(
+                        user_id=user_id,
+                        new_content=document_content,
+                        content_type="notion_page"
+                    )
+                    
+                    if result is None:
+                        errors.append({"id": page_id, "error": "Failed to save to unified brand context"})
+                        continue
+                    
+                    resource_id = result.get("resource_id")
+                    imported_items.append({
+                        "id": page_id,
+                        "resource_id": resource_id,
+                        "name": page_name,
+                        "context_updated": True
+                    })
+                    print(f"[Integration] ✅ Notion page '{page_name}' added to unified brand context")
                 except Exception as e:
+                    print(f"[Integration] Error importing Notion page {page_id}: {e}")
                     errors.append({"id": page_id, "error": str(e)})
         
         elif connection.platform == "google_drive":
@@ -2515,20 +2638,87 @@ async def import_content(
                         errors.append({"id": file_id, "error": "Failed to fetch metadata"})
                         continue
                     
+                    file_name = metadata.get("name", f"Google Drive File {file_id}")
                     mime_type = metadata.get("mimeType", "")
-                    content = await google_drive_service.get_file_content(access_token, file_id, mime_type)
                     
-                    if content:
-                        # Upload to Hyperspell
-                        memory_id = await memory_service.add_text_memory(
-                            user_id=user_id,
-                            text=content,
-                            collection=request.collection or "documents"
-                        )
-                        imported_items.append({"id": file_id, "memory_id": memory_id, "name": metadata.get("name")})
-                    else:
+                    # Get file content
+                    raw_content = await google_drive_service.get_file_content(access_token, file_id, mime_type)
+                    if not raw_content:
                         errors.append({"id": file_id, "error": "Failed to fetch content"})
+                        continue
+                    
+                    # For binary files (PDF, DOCX), try to extract text using document_service
+                    processed_content = raw_content
+                    if mime_type in ('application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 
+                                     'application/msword', 'application/vnd.google-apps.document'):
+                        try:
+                            # Download file temporarily to extract text
+                            import tempfile
+                            import httpx
+                            
+                            # Download file content
+                            async with httpx.AsyncClient() as client:
+                                file_response = await client.get(
+                                    f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media",
+                                    headers={"Authorization": f"Bearer {access_token}"},
+                                    timeout=30.0
+                                )
+                                file_response.raise_for_status()
+                                file_bytes = file_response.content
+                            
+                            # Save to temp file and extract text
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as tmp_file:
+                                tmp_file.write(file_bytes)
+                                tmp_path = tmp_file.name
+                            
+                            try:
+                                extracted_text = await document_service.extract_text(tmp_path, mime_type)
+                                if extracted_text and len(extracted_text.strip()) > 0:
+                                    processed_content = extracted_text
+                                    print(f"[Integration] Extracted {len(extracted_text)} characters from {file_name}")
+                            except Exception as extract_error:
+                                print(f"[Integration] Warning: Failed to extract text from {file_name}: {extract_error}")
+                                # Use raw content if extraction fails
+                            finally:
+                                # Clean up temp file
+                                try:
+                                    os.unlink(tmp_path)
+                                except:
+                                    pass
+                        except Exception as download_error:
+                            print(f"[Integration] Warning: Failed to download file for text extraction: {download_error}")
+                            # Continue with raw content
+                    
+                    # Process content with Claude to extract key information
+                    print(f"[Integration] Processing Google Drive file '{file_name}' with Claude...")
+                    enhanced_content = await process_content_with_claude(
+                        content=processed_content,
+                        source_name=file_name,
+                        source_type="google drive file"
+                    )
+                    
+                    # Append to unified brand context (same as uploaded files)
+                    document_content = f"Google Drive File: {file_name}\n\n{enhanced_content}"
+                    result = await memory_service.append_to_unified_brand_context(
+                        user_id=user_id,
+                        new_content=document_content,
+                        content_type="google_drive_file"
+                    )
+                    
+                    if result is None:
+                        errors.append({"id": file_id, "error": "Failed to save to unified brand context"})
+                        continue
+                    
+                    resource_id = result.get("resource_id")
+                    imported_items.append({
+                        "id": file_id,
+                        "resource_id": resource_id,
+                        "name": file_name,
+                        "context_updated": True
+                    })
+                    print(f"[Integration] ✅ Google Drive file '{file_name}' added to unified brand context")
                 except Exception as e:
+                    print(f"[Integration] Error importing Google Drive file {file_id}: {e}")
                     errors.append({"id": file_id, "error": str(e)})
         
         elif connection.platform == "jira":
@@ -2552,18 +2742,41 @@ async def import_content(
                 # item_ids are issue keys (e.g., "PROJ-123")
                 for issue_key in request.item_ids:
                     try:
-                        content = await jira_service.get_issue_content(access_token, cloud_id, issue_key)
-                        if content:
-                            # Upload to Hyperspell
-                            memory_id = await memory_service.add_text_memory(
-                                user_id=user_id,
-                                text=content,
-                                collection=request.collection or "documents"
-                            )
-                            imported_items.append({"id": issue_key, "memory_id": memory_id, "name": issue_key})
-                        else:
+                        raw_content = await jira_service.get_issue_content(access_token, cloud_id, issue_key)
+                        if not raw_content:
                             errors.append({"id": issue_key, "error": "Failed to fetch content"})
+                            continue
+                        
+                        # Process content with Claude to extract key information
+                        print(f"[Integration] Processing Jira issue '{issue_key}' with Claude...")
+                        processed_content = await process_content_with_claude(
+                            content=raw_content,
+                            source_name=issue_key,
+                            source_type="jira issue"
+                        )
+                        
+                        # Append to unified brand context (same as uploaded files)
+                        document_content = f"Jira Issue: {issue_key}\n\n{processed_content}"
+                        result = await memory_service.append_to_unified_brand_context(
+                            user_id=user_id,
+                            new_content=document_content,
+                            content_type="jira_issue"
+                        )
+                        
+                        if result is None:
+                            errors.append({"id": issue_key, "error": "Failed to save to unified brand context"})
+                            continue
+                        
+                        resource_id = result.get("resource_id")
+                        imported_items.append({
+                            "id": issue_key,
+                            "resource_id": resource_id,
+                            "name": issue_key,
+                            "context_updated": True
+                        })
+                        print(f"[Integration] ✅ Jira issue '{issue_key}' added to unified brand context")
                     except Exception as e:
+                        print(f"[Integration] Error importing Jira issue {issue_key}: {e}")
                         errors.append({"id": issue_key, "error": str(e)})
         
         # Update last_synced_at
