@@ -433,9 +433,10 @@ class JiraIssueResponse(BaseModel):
 
 
 class ImportContentRequest(BaseModel):
-    """Request to import content"""
-    source: str
-    content_id: str
+    """Request to import content from integrations"""
+    integration_id: int
+    item_ids: List[str]
+    collection: Optional[str] = None
 
 
 # ===== SORA VIDEO JOB SCHEMA =====
