@@ -185,6 +185,8 @@ class Mem0Service:
             self.available = True
             storage_type = "S3 (persistent)" if vector_db == 's3_vectors' else "ChromaDB (local)"
             print(f"[Mem0] OK Mem0 service initialized with {storage_type} storage")
+            if vector_db == 's3_vectors':
+                print(f"[Mem0] ✅ Memories will persist across deployments and restarts")
             
             # Verify S3 connection if using S3
             if vector_db == 's3_vectors' and self.available:
