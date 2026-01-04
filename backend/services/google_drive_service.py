@@ -63,8 +63,10 @@ class GoogleDriveService:
             print(f"[GoogleDrive] Client ID: {self.client_id[:20]}...")
             
             async with httpx.AsyncClient() as client:
+                # Use correct Google OAuth token endpoint
+                token_url = "https://oauth2.googleapis.com/token"
                 response = await client.post(
-                    f"{self.oauth_base_url}/token",
+                    token_url,
                     data={
                         "client_id": self.client_id,
                         "client_secret": self.client_secret,
