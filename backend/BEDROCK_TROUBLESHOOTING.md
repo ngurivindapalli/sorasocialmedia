@@ -119,3 +119,4 @@ aws iam get-user-policy --user-name noel-bedrock-user --policy-name <POLICY_NAME
 
 
 
+

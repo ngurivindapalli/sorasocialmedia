@@ -374,3 +374,4 @@ The integration is **non-blocking** - if Hyperspell is unavailable, the app cont
 
 
 
+

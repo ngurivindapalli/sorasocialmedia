@@ -103,21 +103,56 @@ class Mem0Service:
             
             # Initialize Mem0 with config
             try:
+                print(f"[Mem0] Initializing with config: {mem0_config}")
                 self.memory = Memory.from_config(mem0_config)
+                print(f"[Mem0] ✅ Successfully initialized with config")
             except Exception as config_error:
                 # Fallback: try simple initialization
                 print(f"[Mem0] WARNING: Config initialization failed, trying simple init: {config_error}")
+                import traceback
+                traceback.print_exc()
+                
+                # If S3 was requested but failed, this is a problem
+                if vector_db == 's3_vectors':
+                    print(f"[Mem0] ❌ CRITICAL: S3 vector initialization failed! Memories will NOT persist.")
+                    print(f"[Mem0] Check: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET, AWS_REGION")
+                    print(f"[Mem0] Bucket name: {aws_bucket}")
+                    print(f"[Mem0] Region: {aws_region}")
+                    print(f"[Mem0] Access key set: {bool(aws_access_key)}")
+                    print(f"[Mem0] Secret key set: {bool(aws_secret_key)}")
+                
                 if vector_db == 'chroma':
                     backend_dir = Path(__file__).parent.parent
                     chroma_persist_dir = backend_dir / "chroma_db"
                     chroma_persist_dir.mkdir(exist_ok=True)
                     chroma_persist_path = str(chroma_persist_dir.absolute())
                     os.environ['CHROMA_PERSIST_DIRECTORY'] = chroma_persist_path
+                    print(f"[Mem0] Falling back to ChromaDB at: {chroma_persist_path}")
+                
                 self.memory = Memory()
+                print(f"[Mem0] ⚠️ Using fallback initialization - persistence may be limited")
             
             self.available = True
             storage_type = "S3 (persistent)" if vector_db == 's3_vectors' else "ChromaDB (local)"
             print(f"[Mem0] OK Mem0 service initialized with {storage_type} storage")
+            
+            # Verify S3 connection if using S3
+            if vector_db == 's3_vectors' and self.available:
+                try:
+                    # Try to verify S3 access by checking if we can list the bucket
+                    import boto3
+                    s3_client = boto3.client(
+                        's3',
+                        aws_access_key_id=aws_access_key,
+                        aws_secret_access_key=aws_secret_key,
+                        region_name=aws_region
+                    )
+                    # Try to head the bucket to verify access
+                    s3_client.head_bucket(Bucket=aws_bucket)
+                    print(f"[Mem0] ✅ S3 bucket access verified: {aws_bucket}")
+                except Exception as s3_error:
+                    print(f"[Mem0] ⚠️ WARNING: Could not verify S3 bucket access: {s3_error}")
+                    print(f"[Mem0] Memories may not persist correctly. Check IAM permissions.")
             
         except Exception as e:
             print(f"[Mem0] ERROR: Error initializing Mem0 service: {e}")
