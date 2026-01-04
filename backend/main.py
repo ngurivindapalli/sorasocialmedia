@@ -2394,10 +2394,8 @@ async def list_google_drive_files(
         GoogleDriveFileResponse(
             id=file.get("id", ""),
             name=file.get("name", ""),
-            mime_type=file.get("mimeType", ""),
-            modified_time=file.get("modifiedTime"),
-            size=file.get("size"),
-            web_view_link=None
+            mimeType=file.get("mimeType", ""),
+            webViewLink=file.get("webViewLink")
         )
         for file in files
     ]
@@ -6424,8 +6422,8 @@ async def upload_to_memory(
                         status_code=500,
                         detail="Failed to save document: Invalid resource_id returned."
                     )
-                
-                return {
+        
+        return {
                     "success": True,
                     "resource_id": resource_id,
                     "filename": file.filename,
