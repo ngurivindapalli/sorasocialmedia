@@ -63,20 +63,23 @@ class Mem0Service:
                     # Use S3 for vector storage (persistent across deployments)
                     # AWS credentials should be set via environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
                     # Mem0 will automatically use them from environment
-                    # Mem0 S3 vectors configuration - try multiple formats
-                    # First try: bucket and index (as per Mem0 docs)
+                    # Mem0 S3 vectors configuration
+                    # Try different index name formats - S3 Vectors may have naming restrictions
+                    # Index names must be lowercase, alphanumeric, and may have length restrictions
+                    index_name = "mem0memories"  # Simplified name without underscores
+                    
                     mem0_config = {
                         "vector_store": {
                             "provider": "s3_vectors",
                             "config": {
-                                "bucket": aws_bucket,  # Use 'bucket' not 'vector_bucket_name'
-                                "index": "mem0_memories",  # Index name for the collection
-                                "region": aws_region  # Use 'region' not 'region_name'
+                                "bucket": aws_bucket,
+                                "index": index_name,
+                                "region": aws_region
                                 # AWS credentials should be in environment variables
                             }
                         }
                     }
-                    print(f"[Mem0] Configuring S3 vectors with bucket: {aws_bucket}, index: mem0_memories, region: {aws_region}")
+                    print(f"[Mem0] Configuring S3 vectors with bucket: {aws_bucket}, index: {index_name}, region: {aws_region}")
                     # Ensure AWS credentials are in environment for Mem0 to use
                     if aws_access_key:
                         os.environ['AWS_ACCESS_KEY_ID'] = aws_access_key
@@ -110,30 +113,74 @@ class Mem0Service:
                 self.memory = Memory.from_config(mem0_config)
                 print(f"[Mem0] ✅ Successfully initialized with config")
             except Exception as config_error:
-                # Fallback: try simple initialization
-                print(f"[Mem0] WARNING: Config initialization failed, trying simple init: {config_error}")
-                import traceback
-                traceback.print_exc()
-                
-                # If S3 was requested but failed, this is a problem
-                if vector_db == 's3_vectors':
-                    print(f"[Mem0] ❌ CRITICAL: S3 vector initialization failed! Memories will NOT persist.")
-                    print(f"[Mem0] Check: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET, AWS_REGION")
-                    print(f"[Mem0] Bucket name: {aws_bucket}")
-                    print(f"[Mem0] Region: {aws_region}")
-                    print(f"[Mem0] Access key set: {bool(aws_access_key)}")
-                    print(f"[Mem0] Secret key set: {bool(aws_secret_key)}")
-                
-                if vector_db == 'chroma':
-                    backend_dir = Path(__file__).parent.parent
-                    chroma_persist_dir = backend_dir / "chroma_db"
-                    chroma_persist_dir.mkdir(exist_ok=True)
-                    chroma_persist_path = str(chroma_persist_dir.absolute())
-                    os.environ['CHROMA_PERSIST_DIRECTORY'] = chroma_persist_path
-                    print(f"[Mem0] Falling back to ChromaDB at: {chroma_persist_path}")
-                
-                self.memory = Memory()
-                print(f"[Mem0] ⚠️ Using fallback initialization - persistence may be limited")
+                # If S3 failed with invalid index name, try alternative index names
+                if vector_db == 's3_vectors' and "Invalid index name" in str(config_error):
+                    print(f"[Mem0] WARNING: Index name '{index_name}' invalid, trying alternatives...")
+                    
+                    # Try alternative index names (S3 Vectors naming rules: lowercase, no underscores, 3-63 chars)
+                    alternative_indexes = ["memories", "mem0memories", "mem0index", "vectorindex"]
+                    
+                    for alt_index in alternative_indexes:
+                        try:
+                            print(f"[Mem0] Trying index name: {alt_index}")
+                            alt_config = {
+                                "vector_store": {
+                                    "provider": "s3_vectors",
+                                    "config": {
+                                        "bucket": aws_bucket,
+                                        "index": alt_index,
+                                        "region": aws_region
+                                    }
+                                }
+                            }
+                            self.memory = Memory.from_config(alt_config)
+                            print(f"[Mem0] ✅ Successfully initialized with index: {alt_index}")
+                            mem0_config = alt_config  # Update for logging
+                            break
+                        except Exception as alt_error:
+                            if "Invalid index name" not in str(alt_error):
+                                # Different error - might be progress
+                                print(f"[Mem0] Index {alt_index} failed with different error: {alt_error}")
+                            continue
+                    else:
+                        # All alternative indexes failed
+                        print(f"[Mem0] ❌ All index name attempts failed")
+                        raise config_error
+                else:
+                    # Other error or not S3 - try fallback
+                    print(f"[Mem0] WARNING: Config initialization failed: {config_error}")
+                    import traceback
+                    traceback.print_exc()
+                    
+                    # If S3 was requested but failed, this is a problem
+                    if vector_db == 's3_vectors':
+                        print(f"[Mem0] ❌ CRITICAL: S3 vector initialization failed! Memories will NOT persist.")
+                        print(f"[Mem0] Check: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET, AWS_REGION")
+                        print(f"[Mem0] Bucket name: {aws_bucket}")
+                        print(f"[Mem0] Region: {aws_region}")
+                        print(f"[Mem0] Access key set: {bool(aws_access_key)}")
+                        print(f"[Mem0] Secret key set: {bool(aws_secret_key)}")
+                        
+                        # Fallback to ChromaDB if S3 completely fails
+                        print(f"[Mem0] ⚠️ Falling back to ChromaDB (memories will NOT persist across restarts)")
+                        backend_dir = Path(__file__).parent.parent
+                        chroma_persist_dir = backend_dir / "chroma_db"
+                        chroma_persist_dir.mkdir(exist_ok=True)
+                        chroma_persist_path = str(chroma_persist_dir.absolute())
+                        os.environ['CHROMA_PERSIST_DIRECTORY'] = chroma_persist_path
+                        self.memory = Memory()
+                        vector_db = 'chroma'  # Update for logging
+                    elif vector_db == 'chroma':
+                        backend_dir = Path(__file__).parent.parent
+                        chroma_persist_dir = backend_dir / "chroma_db"
+                        chroma_persist_dir.mkdir(exist_ok=True)
+                        chroma_persist_path = str(chroma_persist_dir.absolute())
+                        os.environ['CHROMA_PERSIST_DIRECTORY'] = chroma_persist_path
+                        print(f"[Mem0] Falling back to ChromaDB at: {chroma_persist_path}")
+                        self.memory = Memory()
+                    else:
+                        self.memory = Memory()
+                        print(f"[Mem0] ⚠️ Using fallback initialization - persistence may be limited")
             
             self.available = True
             storage_type = "S3 (persistent)" if vector_db == 's3_vectors' else "ChromaDB (local)"
