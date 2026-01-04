@@ -40,11 +40,13 @@ Go to [Render Dashboard](https://dashboard.render.com/) → Your Backend Service
 **Must have ALL of these:**
 
 ```
-AWS_ACCESS_KEY_ID=AKIATHVQLGY4P4S2JFJ4
-AWS_SECRET_ACCESS_KEY=bb6+xf6XqKjW7KRX0m7gmS8Gc5lWcsjCCRROA6Za
+AWS_ACCESS_KEY_ID=your-aws-access-key-id-here
+AWS_SECRET_ACCESS_KEY=your-aws-secret-access-key-here
 AWS_S3_BUCKET=x-video-hook-mem0-20251228193510
 AWS_REGION=us-east-1
 ```
+<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
+run_terminal_cmd
 
 ### Verification Checklist
 

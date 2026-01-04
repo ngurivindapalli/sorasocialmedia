@@ -63,17 +63,20 @@ class Mem0Service:
                     # Use S3 for vector storage (persistent across deployments)
                     # AWS credentials should be set via environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
                     # Mem0 will automatically use them from environment
+                    # Mem0 S3 vectors configuration - try multiple formats
+                    # First try: bucket and index (as per Mem0 docs)
                     mem0_config = {
                         "vector_store": {
                             "provider": "s3_vectors",
                             "config": {
-                                "collection_name": "mem0_memories",
-                                "vector_bucket_name": aws_bucket,  # Correct field name
-                                "region_name": aws_region  # Correct field name
-                                # AWS credentials are read from environment variables automatically
+                                "bucket": aws_bucket,  # Use 'bucket' not 'vector_bucket_name'
+                                "index": "mem0_memories",  # Index name for the collection
+                                "region": aws_region  # Use 'region' not 'region_name'
+                                # AWS credentials should be in environment variables
                             }
                         }
                     }
+                    print(f"[Mem0] Configuring S3 vectors with bucket: {aws_bucket}, index: mem0_memories, region: {aws_region}")
                     # Ensure AWS credentials are in environment for Mem0 to use
                     if aws_access_key:
                         os.environ['AWS_ACCESS_KEY_ID'] = aws_access_key
