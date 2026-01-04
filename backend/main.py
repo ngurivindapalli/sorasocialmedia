@@ -6424,8 +6424,8 @@ async def upload_to_memory(
                         status_code=500,
                         detail="Failed to save document: Invalid resource_id returned."
                     )
-        
-        return {
+                
+                return {
                     "success": True,
                     "resource_id": resource_id,
                     "filename": file.filename,
