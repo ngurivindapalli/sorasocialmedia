@@ -72,9 +72,9 @@ class Mem0Service:
                         "vector_store": {
                             "provider": "s3_vectors",
                             "config": {
-                                "bucket": aws_bucket,
-                                "index": index_name,
-                                "region": aws_region
+                                "vector_bucket_name": aws_bucket,
+                                "collection_name": index_name,
+                                "region_name": aws_region
                                 # AWS credentials should be in environment variables
                             }
                         }
@@ -127,9 +127,9 @@ class Mem0Service:
                                 "vector_store": {
                                     "provider": "s3_vectors",
                                     "config": {
-                                        "bucket": aws_bucket,
-                                        "index": alt_index,
-                                        "region": aws_region
+                                        "vector_bucket_name": aws_bucket,
+                                        "collection_name": alt_index,
+                                        "region_name": aws_region
                                     }
                                 }
                             }
