@@ -9,6 +9,7 @@ import os
 import asyncio
 import json
 import re
+import httpx
 from dotenv import load_dotenv
 
 from services.instagram_api import InstagramAPIService
@@ -1803,8 +1804,10 @@ async def login(request: UserLoginRequest, db: Session = Depends(get_db)):
 
 
 @app.get("/api/auth/me")
-async def get_current_user_info(current_user: User = Depends(get_current_user)):
+async def get_current_user_info(current_user: Optional[User] = Depends(get_current_user)):
     """Get current user information"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     return {
         "id": current_user.id,
         "username": current_user.username,
@@ -1943,10 +1946,10 @@ async def oauth_callback(
         db.commit()
         db.refresh(connection)
     
-    # Redirect to frontend success page
+    # Redirect to frontend success page (Settings tab)
     from fastapi.responses import RedirectResponse
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-    return RedirectResponse(url=f"{frontend_url}/dashboard?connected={platform}")
+    return RedirectResponse(url=f"{frontend_url}/dashboard?tab=settings&connected={platform}")
 
 
 # ===== SOCIAL MEDIA CONNECTION MANAGEMENT =====
@@ -2178,7 +2181,8 @@ async def integration_callback(
                     access_token=access_token,
                     token_expires_at=expires_at,
                     platform_user_id=user_info.get("id") if user_info else None,
-                    platform_user_email=user_info.get("email") if user_info else None
+                    platform_user_email=user_info.get("email") if user_info else None,
+                    is_active=True
                 )
                 db.add(existing)
             
@@ -2317,15 +2321,46 @@ async def get_integrations(
 
 
 def _extract_notion_title(page: dict) -> str:
-    """Extract title from Notion page object"""
+    """Extract title from Notion page or database entry object"""
+    # Check if it's a database entry (has properties)
     properties = page.get("properties", {})
-    for prop_name, prop_data in properties.items():
-        if prop_data.get("type") == "title":
-            title_array = prop_data.get("title", [])
-            if title_array:
-                return "".join([item.get("plain_text", "") for item in title_array])
-    # Fallback to page URL or ID
-    return page.get("url", "").split("/")[-1] or page.get("id", "")
+    if properties:
+        for prop_name, prop_data in properties.items():
+            if prop_data.get("type") == "title":
+                title_array = prop_data.get("title", [])
+                if title_array:
+                    return "".join([item.get("plain_text", "") for item in title_array])
+    
+    # Check if it's a database (has title in database object)
+    if page.get("object") == "database":
+        title_array = page.get("title", [])
+        if title_array:
+            return "".join([item.get("plain_text", "") for item in title_array])
+    
+    # Check if it's a page with title in page properties
+    if page.get("object") == "page":
+        # Try to get title from page properties
+        page_properties = page.get("properties", {})
+        for prop_name, prop_data in page_properties.items():
+            if prop_data.get("type") == "title":
+                title_array = prop_data.get("title", [])
+                if title_array:
+                    return "".join([item.get("plain_text", "") for item in title_array])
+    
+    # Fallback: try to extract from URL or use ID
+    url = page.get("url", "")
+    if url:
+        # Extract page name from URL (last part before query params)
+        url_part = url.split("/")[-1].split("?")[0]
+        if url_part and url_part != page.get("id", ""):
+            return url_part.replace("-", " ").title()
+    
+    # Last resort: use ID
+    page_id = page.get("id", "")
+    if page_id:
+        return f"Notion Page {page_id[:8]}"
+    
+    return "Untitled"
 
 
 @app.get("/api/integrations/notion/pages", response_model=List[NotionPageResponse])
@@ -2341,23 +2376,69 @@ async def list_notion_pages(
         IntegrationConnection.is_active == True
     ).first()
     
-    if not connection or not connection.access_token:
+    if not connection:
+        print(f"[Notion Pages] No connection found for user {current_user.id}")
         raise HTTPException(
             status_code=404, 
             detail="Notion not connected. Please connect your Notion account first."
         )
     
-    pages = await notion_service.search_pages(connection.access_token)
-    
-    return [
-        NotionPageResponse(
-            id=page.get("id", ""),
-            title=_extract_notion_title(page),
-            url=page.get("url"),
-            last_edited_time=page.get("last_edited_time")
+    if not connection.access_token:
+        print(f"[Notion Pages] Connection exists but no access token for user {current_user.id}")
+        raise HTTPException(
+            status_code=404, 
+            detail="Notion connection is missing access token. Please reconnect your Notion account."
         )
-        for page in pages
-    ]
+    
+    print(f"[Notion Pages] Fetching pages for user {current_user.id}, connection ID: {connection.id}")
+    
+    try:
+        pages = await notion_service.search_pages(connection.access_token)
+        print(f"[Notion Pages] Found {len(pages)} pages")
+        
+        if not pages:
+            print(f"[Notion Pages] Warning: No pages returned. This might indicate:")
+            print(f"  - The integration doesn't have access to any pages")
+            print(f"  - All pages are in databases (not top-level pages)")
+            print(f"  - The access token might be invalid or expired")
+        
+        result = [
+            NotionPageResponse(
+                id=page.get("id", ""),
+                title=_extract_notion_title(page),
+                url=page.get("url"),
+                last_edited_time=page.get("last_edited_time")
+            )
+            for page in pages
+        ]
+        
+        print(f"[Notion Pages] Returning {len(result)} pages")
+        return result
+    except httpx.HTTPStatusError as e:
+        print(f"[Notion Pages] HTTP error: {e.response.status_code} - {e.response.text}")
+        if e.response.status_code == 401:
+            raise HTTPException(
+                status_code=401,
+                detail="Notion access token expired or invalid. Please reconnect your Notion account."
+            )
+        elif e.response.status_code == 403:
+            raise HTTPException(
+                status_code=403,
+                detail="Notion integration doesn't have permission to access pages. Please check your Notion integration settings."
+            )
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to fetch Notion pages: {e.response.text}"
+            )
+    except Exception as e:
+        print(f"[Notion Pages] Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch Notion pages: {str(e)}"
+        )
 
 
 @app.get("/api/integrations/google-drive/files", response_model=List[GoogleDriveFileResponse])
@@ -2853,7 +2934,8 @@ async def post_video(
                 result = await posting_service.post_to_linkedin(
                     access_token=connection.access_token,
                     video_url=request.video_url,
-                    caption=request.caption,
+                    image_url=request.image_url,
+                    caption=request.caption or "",
                     person_urn=f"urn:li:person:{connection.account_id}"
                 )
             elif connection.platform == "x":
@@ -3015,6 +3097,7 @@ async def generate_veo3_video(request: Veo3GenerateRequest):
     """
     Generate a video using Veo 3 API
     Supports text-to-video and image-to-video generation
+    If max_extensions > 0, extensions will be automatically triggered when the base video completes.
     """
     try:
         if not veo3_service.project_id:
@@ -3030,6 +3113,33 @@ async def generate_veo3_video(request: Veo3GenerateRequest):
             image_urls=request.image_urls,
             style=request.style
         )
+        
+        # Set up extension metadata if max_extensions > 0
+        if request.max_extensions > 0:
+            # Initialize extension cache if needed
+            if not hasattr(veo3_service, '_extension_cache'):
+                veo3_service._extension_cache = {}
+            
+            job_id = result.get("job_id")
+            extension_metadata = {
+                'base_job_id': job_id,
+                'original_job_id': job_id,
+                'needs_extension': True,
+                'extension_count': request.max_extensions,
+                'extensions_completed': 0,
+                'current_duration': request.duration,
+                'last_extension_job_id': None,
+                'extension_attempted': False,
+                'extension_failed': False
+            }
+            # Store with both full job_id and operation ID for easier lookup
+            veo3_service._extension_cache[job_id] = extension_metadata
+            # Also store with just the operation ID (last part after /operations/)
+            if '/' in job_id:
+                operation_id = job_id.split('/')[-1]
+                veo3_service._extension_cache[operation_id] = extension_metadata
+            print(f"[API] [OK] Extension metadata set up for job_id: {job_id[:80]}...")
+            print(f"[API] [OK] {request.max_extensions} extensions will be triggered automatically when video completes")
         
         return Veo3GenerateResponse(**result)
     except HTTPException:
@@ -3063,12 +3173,12 @@ async def get_veo3_status(job_id: str, extend: Optional[bool] = None):
         
         # Check video status
         status_value = status.get("status")
-        print(f"[API] 🔍 Status check - status: {status_value}")
+        print(f"[API] [STATUS] Status check - status: {status_value}")
         
         # If video generation failed, log the error and return immediately
         if status_value == "failed":
             error_msg = status.get("error", "Unknown error")
-            print(f"[API] ❌ Video generation FAILED: {error_msg}")
+            print(f"[API] [ERROR] Video generation FAILED: {error_msg}")
             return Veo3StatusResponse(**status)
         
         # Check if this job needs extensions (from cache)
@@ -3076,13 +3186,38 @@ async def get_veo3_status(job_id: str, extend: Optional[bool] = None):
         is_extension_job = status.get("is_extension", False)
         
         # Check extension cache to see if this job needs extensions
-        if not is_extension_job and hasattr(veo3_service, '_extension_cache'):
-            for cached_job_id, cached_meta in veo3_service._extension_cache.items():
-                # Check if this job_id matches (could be full path or just operation ID)
-                if job_id == cached_job_id or job_id.endswith(cached_job_id) or cached_job_id.endswith(job_id):
-                    extension_metadata = cached_meta
-                    is_extension_job = True
-                    break
+        # This works for both base jobs and extension jobs
+        if hasattr(veo3_service, '_extension_cache'):
+            print(f"[API] [CACHE] Checking extension cache for job_id: {job_id[:80]}...")
+            print(f"[API] [CACHE] Cache keys: {list(veo3_service._extension_cache.keys())[:3] if veo3_service._extension_cache else 'empty'}")
+            
+            # Try exact match first
+            if job_id in veo3_service._extension_cache:
+                extension_metadata = veo3_service._extension_cache[job_id]
+                is_extension_job = True
+                print(f"[API] [OK] Found extension metadata (exact match)")
+            else:
+                # Try partial matches (could be full path or just operation ID)
+                for cached_job_id, cached_meta in veo3_service._extension_cache.items():
+                    # Extract operation ID from full path for comparison
+                    # Format: projects/.../operations/{operation_id}
+                    job_operation_id = job_id.split('/')[-1] if '/' in job_id else job_id
+                    cached_operation_id = cached_job_id.split('/')[-1] if '/' in cached_job_id else cached_job_id
+                    
+                    # Check if this job_id matches (could be full path or just operation ID)
+                    if (job_id == cached_job_id or 
+                        job_id.endswith(cached_job_id) or 
+                        cached_job_id.endswith(job_id) or
+                        job_operation_id == cached_operation_id or
+                        job_operation_id == cached_job_id or
+                        cached_operation_id == job_id):
+                        extension_metadata = cached_meta
+                        is_extension_job = True
+                        print(f"[API] [OK] Found extension metadata (partial match: {cached_job_id[:50]}...)")
+                        break
+                
+                if not extension_metadata:
+                    print(f"[API] [WARN] No extension metadata found in cache for this job_id")
         
         # If video is completed, check if we need to trigger extensions
         if status_value == "completed":
@@ -3091,7 +3226,7 @@ async def get_veo3_status(job_id: str, extend: Optional[bool] = None):
                 extension_count = extension_metadata.get("extension_count", 0)
                 base_job_id = extension_metadata.get("base_job_id") or extension_metadata.get("original_job_id") or job_id
                 
-                print(f"[API] ✅ Base video completed! Extensions: {extensions_completed}/{extension_count}")
+                print(f"[API] [OK] Base video completed! Extensions: {extensions_completed}/{extension_count}")
                 
                 # If we haven't completed all extensions, trigger the next one
                 # BUT: Check if we've already attempted this extension and failed (prevent infinite loops)
@@ -3101,27 +3236,51 @@ async def get_veo3_status(job_id: str, extend: Optional[bool] = None):
                 if extensions_completed < extension_count:
                     # Prevent infinite retry loops - if extension failed, don't retry
                     if extension_failed:
-                        print(f"[API] ⚠️ Extension previously failed, not retrying to prevent infinite loop")
+                        print(f"[API] [WARN] Extension previously failed, not retrying to prevent infinite loop")
                         status["needs_extension"] = True
                         status["extension_count"] = extension_count
                         status["extensions_completed"] = extensions_completed
                         status["error"] = extension_metadata.get("extension_error", "Extension failed")
                         return Veo3StatusResponse(**status)
                     
+                    # CRITICAL: Check if an extension is already in progress to prevent duplicate triggers
+                    # If last_extension_job_id exists and is different from current job_id, check its status
+                    last_ext_job_id = extension_metadata.get("last_extension_job_id")
+                    if last_ext_job_id and last_ext_job_id != job_id:
+                        try:
+                            last_ext_status = await veo3_service.get_video_status(last_ext_job_id)
+                            if last_ext_status.get("status") in ["queued", "in_progress"]:
+                                # Extension already in progress, return its status
+                                print(f"[API] [WAIT] Extension {extensions_completed + 1} already in progress, waiting...")
+                                status["needs_extension"] = True
+                                status["extension_count"] = extension_count
+                                status["extensions_completed"] = extensions_completed
+                                status["is_extension"] = True
+                                status["status"] = last_ext_status.get("status", "in_progress")
+                                status["progress"] = last_ext_status.get("progress", 0)
+                                status["job_id"] = last_ext_job_id  # Return the extension job ID
+                                return Veo3StatusResponse(**status)
+                        except Exception:
+                            # If we can't check the status, proceed with starting new extension
+                            pass
+                    
                     # Only attempt extension if we haven't tried yet, or if previous attempt succeeded
                     if not extension_attempted or extensions_completed > 0:
                         try:
-                            print(f"[API] 🎬 Triggering extension {extensions_completed + 1}/{extension_count}...")
+                            print(f"[API] [EXTEND] Triggering extension {extensions_completed + 1}/{extension_count}...")
                             
                             # Mark that we're attempting extension (prevent duplicate attempts)
                             extension_metadata["extension_attempted"] = True
                             extension_metadata["extension_failed"] = False
-                            veo3_service._extension_cache[base_job_id] = extension_metadata
+                            veo3_service._extension_cache[base_job_id] = extension_metadata.copy()
                             
                             # Use Gemini API to extend the video
                             # For the first extension, use the base job_id
-                            # For subsequent extensions, use the last extension job_id
+                            # For subsequent extensions, use the current job_id (which is the completed extension)
+                            # This allows chaining: base -> ext1 -> ext2 -> ext3, etc.
                             source_job_id = base_job_id if extensions_completed == 0 else job_id
+                            print(f"[API] [EXTEND] Triggering extension {extensions_completed + 1}/{extension_count}...")
+                            print(f"[API] [EXTEND] Source job for extension {extensions_completed + 1}: {source_job_id[:50]}...")
                             
                             extension_result = await veo3_service.extend_video_gemini_api(
                                 base_job_id=source_job_id,
@@ -3132,16 +3291,18 @@ async def get_veo3_status(job_id: str, extend: Optional[bool] = None):
                             # Update metadata - extension started successfully
                             extension_metadata["extensions_completed"] = extensions_completed + 1
                             extension_metadata["current_duration"] = 8 + (extension_metadata["extensions_completed"] * 7)
-                            extension_metadata["last_extension_job_id"] = extension_result.get("job_id")
+                            new_extension_job_id = extension_result.get("job_id")
+                            extension_metadata["last_extension_job_id"] = new_extension_job_id  # Always update to latest extension
                             extension_metadata["extension_attempted"] = False  # Reset for next extension
                             extension_metadata["extension_failed"] = False
                             
-                            # Update cache with new extension job
-                            new_extension_job_id = extension_result.get("job_id")
-                            veo3_service._extension_cache[new_extension_job_id] = extension_metadata
-                            veo3_service._extension_cache[base_job_id] = extension_metadata
+                            # Update cache with new extension job - CRITICAL: Update both the new job and base job
+                            veo3_service._extension_cache[new_extension_job_id] = extension_metadata.copy()  # Make a copy
+                            veo3_service._extension_cache[base_job_id] = extension_metadata.copy()  # Make a copy
                             
-                            print(f"[API] ✅ Extension {extensions_completed + 1} started! Job ID: {new_extension_job_id}")
+                            print(f"[API] [OK] Extension {extensions_completed + 1}/{extension_count} started! Job ID: {new_extension_job_id[:80]}...")
+                            print(f"[API] [DEBUG] Updated last_extension_job_id to: {new_extension_job_id[:80]}...")
+                            print(f"[API] [DEBUG] Current duration: {extension_metadata['current_duration']}s")
                             
                             # Return status showing extension in progress
                             status["needs_extension"] = True
@@ -3153,7 +3314,7 @@ async def get_veo3_status(job_id: str, extend: Optional[bool] = None):
                             return Veo3StatusResponse(**status)
                             
                         except Exception as ext_error:
-                            print(f"[API] ❌ Extension failed: {ext_error}")
+                            print(f"[API] [ERROR] Extension failed: {ext_error}")
                             # Mark extension as failed to prevent infinite retries
                             extension_metadata["extension_failed"] = True
                             extension_metadata["extension_error"] = str(ext_error)
@@ -3168,14 +3329,82 @@ async def get_veo3_status(job_id: str, extend: Optional[bool] = None):
                             return Veo3StatusResponse(**status)
                     else:
                         # Extension already attempted, waiting for it to complete
-                        print(f"[API] ⏳ Extension {extensions_completed + 1} already attempted, waiting for completion...")
+                        print(f"[API] [WAIT] Extension {extensions_completed + 1} already attempted, waiting for completion...")
                 else:
                     # All extensions completed!
-                    print(f"[API] ✅ All extensions completed! Final duration: ~{8 + (extension_count * 7)}s")
-                    status["needs_extension"] = True
-                    status["extension_count"] = extension_count
-                    status["extensions_completed"] = extensions_completed
-                    status["is_extension"] = True
+                    print(f"[API] [OK] All extensions completed! Final duration: ~{8 + (extension_count * 7)}s")
+                    
+                    # Get the final extension job ID from metadata
+                    last_extension_job_id = extension_metadata.get("last_extension_job_id")
+                    
+                    # CRITICAL: Always use last_extension_job_id if available (this is the final extended video)
+                    # Only use current job_id if it's an extension job AND it matches last_extension_job_id
+                    if last_extension_job_id:
+                        # Use the last_extension_job_id from metadata (this is the final extension)
+                        final_job_id = last_extension_job_id
+                        print(f"[API] [OK] Using last_extension_job_id from metadata as final video: {final_job_id[:50]}...")
+                        print(f"[API] [DEBUG] Current job_id was: {job_id[:50]}...")
+                    elif is_extension_job and extensions_completed >= extension_count:
+                        # Fallback: if current job_id is an extension job and all extensions are done, use it
+                        final_job_id = job_id
+                        print(f"[API] [OK] Using current job_id as final extension job (no last_extension_job_id): {final_job_id[:50]}...")
+                    else:
+                        # Last resort: use current job_id (shouldn't happen if extensions worked)
+                        final_job_id = job_id
+                        print(f"[API] [WARN] No last_extension_job_id found, using current job_id: {final_job_id[:50]}...")
+                        print(f"[API] [WARN] This might be the base video, not the extended one!")
+                    
+                    if final_job_id:
+                        # Check status of the final extension job to get the final video
+                        print(f"[API] [OK] Getting final video from extension job: {final_job_id[:80]}...")
+                        print(f"[API] [DEBUG] Extension metadata: completed={extensions_completed}/{extension_count}, last_job_id={last_extension_job_id[:80] if last_extension_job_id else 'None'}...")
+                        try:
+                            extension_status = await veo3_service.get_video_status(final_job_id)
+                            print(f"[API] [DEBUG] Extension status: status={extension_status.get('status')}, video_url={extension_status.get('video_url', 'None')}")
+                            if extension_status.get("status") == "completed":
+                                # Use the extension job's status (has the extended video)
+                                status = extension_status.copy()  # Make a copy to avoid modifying the original
+                                status["needs_extension"] = False  # All extensions done - set to False
+                                status["extension_count"] = extension_count
+                                status["extensions_completed"] = extensions_completed
+                                status["is_extension"] = True
+                                status["job_id"] = final_job_id  # CRITICAL: Use final extension job ID so frontend updates
+                                # Ensure video_url is set
+                                if not status.get("video_url") and extension_status.get("video_url"):
+                                    status["video_url"] = extension_status.get("video_url")
+                                print(f"[API] [OK] Final extended video ready from job: {final_job_id[:80]}...")
+                                print(f"[API] [OK] Video URL: {status.get('video_url', 'None')}")
+                                print(f"[API] [OK] Returning job_id: {status.get('job_id', 'None')[:80]}...")
+                                # Return immediately with the final video
+                                return Veo3StatusResponse(**status)
+                            else:
+                                # Extension still processing, return its status
+                                status["needs_extension"] = False  # All extensions done, just waiting for final video
+                                status["extension_count"] = extension_count
+                                status["extensions_completed"] = extensions_completed
+                                status["is_extension"] = True
+                                status["job_id"] = final_job_id
+                                status["status"] = extension_status.get("status", "in_progress")
+                                status["progress"] = extension_status.get("progress", 0)
+                                status["video_url"] = extension_status.get("video_url")
+                                return Veo3StatusResponse(**status)
+                        except Exception as ext_status_error:
+                            print(f"[API] [WARN] Could not get extension status: {ext_status_error}")
+                            # Fall back to base video if extension status check fails
+                            status["needs_extension"] = False  # All extensions done
+                            status["extension_count"] = extension_count
+                            status["extensions_completed"] = extensions_completed
+                            status["is_extension"] = True
+                            status["job_id"] = final_job_id  # Use final job ID
+                            return Veo3StatusResponse(**status)
+                    else:
+                        # No extension job ID found, use base video
+                        status["needs_extension"] = False  # All extensions done
+                        status["extension_count"] = extension_count
+                        status["extensions_completed"] = extensions_completed
+                        status["is_extension"] = True
+                        # Return with base video since no extension job ID found
+                        return Veo3StatusResponse(**status)
             else:
                 # No extensions needed or metadata not found
                 if extension_metadata:
@@ -3816,9 +4045,7 @@ Style: {style_instruction}
 Length: 2-4 sentences (concise but engaging)
 Tone: {request.caption_style or "engaging"}
 
-{"Include 5-10 relevant hashtags at the end" if request.include_hashtags else "Do not include hashtags"}
-
-Return the caption text only."""
+IMPORTANT: Do NOT include hashtags in the caption. Return only the caption text without any hashtags."""
                 
                 # Try Claude first if available, fallback to OpenAI
                 generated_text = None
@@ -3855,42 +4082,139 @@ Return the caption text only."""
                     generated_text = caption_response.choices[0].message.content.strip()
                     print(f"[API] ✓ Generated caption with OpenAI ({len(generated_text)} chars)")
                 
-                # Extract hashtags if included
-                if request.include_hashtags:
-                    lines = generated_text.split('\n')
-                    caption_lines = []
-                    hashtag_lines = []
-                    
-                    for line in lines:
-                        if line.strip().startswith('#'):
-                            hashtag_lines.append(line.strip())
-                        else:
-                            caption_lines.append(line)
-                    
-                    caption = '\n'.join(caption_lines).strip()
-                    hashtags = [tag.strip('#') for tag in hashtag_lines if tag.strip().startswith('#')]
-                    
-                    # If hashtags weren't separated, try to extract them
-                    if not hashtags and '#' in generated_text:
-                        import re
-                        hashtags = re.findall(r'#(\w+)', generated_text)
-                        caption = re.sub(r'#\w+\s*', '', generated_text).strip()
-                else:
-                    caption = generated_text
+                # Caption should not contain hashtags (we'll generate them separately)
+                caption = generated_text.strip()
+                # Remove any hashtags that might have been included despite instructions
+                import re
+                caption = re.sub(r'#\w+\s*', '', caption).strip()
                 
                 print(f"[API] ✓ Caption generated ({len(caption)} chars)")
-                if hashtags:
-                    print(f"[API] ✓ Extracted {len(hashtags)} hashtags")
             except Exception as e:
                 print(f"[API] ⚠️ Failed to generate caption with AI: {e}")
                 caption = f"Check out our latest content about {request.topic}! 🚀"
-                if request.include_hashtags:
-                    hashtags = [request.topic.lower().replace(' ', '')]
         else:
             # Fallback caption
             caption = f"Exciting news about {request.topic}! Stay tuned for more updates. 🎉"
-            if request.include_hashtags:
-                hashtags = [request.topic.lower().replace(' ', ''), "marketing", "business"]
+        
+        # Step 4.5: Generate hashtags separately after caption is created
+        hashtags = []
+        if request.include_hashtags and openai_service:
+            print(f"[API] #️⃣ Generating relevant hashtags for platform: {request.platform or 'instagram'}...")
+            try:
+                # Determine hashtag count based on platform
+                platform = (request.platform or "instagram").lower()
+                if platform == "linkedin":
+                    hashtag_count = "3-5"  # LinkedIn uses fewer hashtags
+                    platform_guidance = "LinkedIn hashtags should be professional, industry-specific, and relevant to B2B audiences. Focus on business, industry, and professional development tags."
+                else:  # Instagram (default)
+                    hashtag_count = "10-20"  # Instagram uses more hashtags
+                    platform_guidance = "Instagram hashtags should be a mix of popular, niche, and branded tags. Include broad reach tags, specific niche tags, and community tags."
+                
+                # Build hashtag generation prompt
+                hashtag_context = ""
+                if user_context:
+                    hashtag_context = f"\n\nUSER CONTEXT (use this to personalize hashtags):\n{user_context}\n"
+                
+                hashtag_prompt = f"""Generate relevant hashtags for a social media post.
+
+Topic: {request.topic}
+Caption: {caption}
+Platform: {platform}
+{hashtag_context}
+
+{platform_guidance}
+
+Requirements:
+- Generate {hashtag_count} relevant hashtags
+- Hashtags should be directly related to the topic and caption content
+- Mix of broad and niche hashtags
+- No hashtag symbols (#) in your response
+- Return only the hashtag words, separated by commas
+- Each hashtag should be a single word or phrase (no spaces, use camelCase for phrases)
+- Make them specific and relevant to the content
+
+Example format: marketing, business, entrepreneurship, startup, innovation, tech, digitalmarketing, socialmedia, branding, growth
+
+Return only the hashtags, one per line or comma-separated."""
+                
+                # Generate hashtags using AI
+                generated_hashtags = None
+                if openai_service.claude_available:
+                    try:
+                        generated_hashtags = await openai_service.generate_text_with_claude(
+                            prompt=hashtag_prompt,
+                            system_message="You are an expert social media marketer who creates highly relevant, engaging hashtags for social media posts.",
+                            max_tokens=200,
+                            temperature=0.7
+                        )
+                        if generated_hashtags:
+                            print(f"[API] ✓ Generated hashtags with Claude")
+                    except Exception as claude_error:
+                        print(f"[API] ⚠️ Claude hashtag generation failed, falling back to OpenAI: {claude_error}")
+                
+                # Fallback to OpenAI if Claude not available or failed
+                if not generated_hashtags:
+                    hashtag_response = await openai_service.client.chat.completions.create(
+                        model=openai_service.model,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "You are an expert social media marketer who creates highly relevant, engaging hashtags for social media posts."
+                            },
+                            {
+                                "role": "user",
+                                "content": hashtag_prompt
+                            }
+                        ],
+                        temperature=0.7,
+                        max_tokens=200
+                    )
+                    generated_hashtags = hashtag_response.choices[0].message.content.strip()
+                    print(f"[API] ✓ Generated hashtags with OpenAI")
+                
+                # Parse hashtags from response
+                if generated_hashtags:
+                    # Remove any # symbols and split by commas or newlines
+                    hashtag_text = generated_hashtags.replace('#', '').strip()
+                    # Split by comma or newline
+                    hashtag_list = [tag.strip() for tag in re.split(r'[,\n]', hashtag_text) if tag.strip()]
+                    # Clean up hashtags (remove spaces, convert to lowercase)
+                    hashtags = [tag.lower().replace(' ', '') for tag in hashtag_list if tag]
+                    # Limit hashtags based on platform
+                    if platform == "linkedin":
+                        hashtags = hashtags[:5]  # Max 5 for LinkedIn
+                    else:
+                        hashtags = hashtags[:20]  # Max 20 for Instagram
+                    
+                    print(f"[API] ✓ Generated {len(hashtags)} relevant hashtags: {', '.join(hashtags[:5])}...")
+                else:
+                    # Fallback hashtags
+                    topic_words = request.topic.lower().split()
+                    hashtags = [word.replace(' ', '') for word in topic_words[:3]]
+                    if platform == "linkedin":
+                        hashtags.extend(["business", "professional"])
+                    else:
+                        hashtags.extend(["marketing", "business", "entrepreneurship"])
+                    print(f"[API] ⚠️ Using fallback hashtags")
+            except Exception as hashtag_error:
+                print(f"[API] ⚠️ Failed to generate hashtags with AI: {hashtag_error}")
+                # Fallback hashtags
+                topic_words = request.topic.lower().split()
+                hashtags = [word.replace(' ', '') for word in topic_words[:3]]
+                platform = (request.platform or "instagram").lower()
+                if platform == "linkedin":
+                    hashtags.extend(["business", "professional"])
+                else:
+                    hashtags.extend(["marketing", "business", "entrepreneurship"])
+        elif request.include_hashtags:
+            # Fallback if AI service not available
+            topic_words = request.topic.lower().split()
+            hashtags = [word.replace(' ', '') for word in topic_words[:3]]
+            platform = (request.platform or "instagram").lower()
+            if platform == "linkedin":
+                hashtags.extend(["business", "professional"])
+            else:
+                hashtags.extend(["marketing", "business", "entrepreneurship"])
         
         # Combine caption and hashtags
         full_caption = caption
@@ -6572,6 +6896,116 @@ async def get_memory_status():
             "available": False,
             "message": f"Error checking status: {str(e)}"
         }
+
+
+@app.get("/api/memory/documents")
+async def list_user_documents(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    List all documents uploaded by the user.
+    Returns documents stored in memory (Mem0) with metadata.
+    """
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        if not memory_service.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Memory service is not available."
+            )
+        
+        user_id = normalize_user_id(current_user)
+        print(f"[API] Listing documents for user: {user_id}")
+        
+        # List memories filtered by content_type="document"
+        documents = await memory_service.mem0_service.list_memories(
+            user_id=user_id,
+            content_type="document",
+            limit=100
+        )
+        
+        # Format response
+        formatted_docs = []
+        for doc in documents:
+            formatted_docs.append({
+                "id": doc.get("id"),
+                "resource_id": doc.get("id"),  # For compatibility
+                "filename": doc.get("filename") or "Unknown",
+                "content_preview": doc.get("content_preview", ""),
+                "content_length": doc.get("content_length", 0),
+                "created_at": doc.get("created_at"),
+                "metadata": doc.get("metadata", {})
+            })
+        
+        print(f"[API] Found {len(formatted_docs)} documents for user {user_id}")
+        return {
+            "success": True,
+            "documents": formatted_docs,
+            "count": len(formatted_docs)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error listing documents: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to list documents: {str(e)}")
+
+
+@app.delete("/api/memory/documents/{resource_id}")
+async def delete_user_document(
+    resource_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Delete a document and its associated context from memory.
+    Removes the document from Mem0 (and optionally from S3 if stored there).
+    """
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        if not memory_service.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Memory service is not available."
+            )
+        
+        user_id = normalize_user_id(current_user)
+        print(f"[API] Deleting document {resource_id} for user: {user_id}")
+        
+        # Delete from Mem0
+        success = await memory_service.mem0_service.delete_memory(
+            user_id=user_id,
+            memory_id=resource_id
+        )
+        
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to delete document from memory."
+            )
+        
+        # Note: S3 files are not automatically deleted as they may be referenced by multiple memories
+        # If you want to delete S3 files too, you'd need to track the S3 key in metadata
+        
+        print(f"[API] Successfully deleted document {resource_id} for user {user_id}")
+        return {
+            "success": True,
+            "message": "Document and its context have been removed successfully",
+            "resource_id": resource_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error deleting document: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
 
 
 @app.post("/api/memory/summaries")

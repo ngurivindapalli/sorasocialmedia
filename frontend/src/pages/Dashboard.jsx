@@ -14,7 +14,11 @@ import MarketingPost from './MarketingPost.jsx'
 import AigisMarketing from './AigisMarketing.jsx'
 import VeoVideo from './VeoVideo.jsx'
 import SEOAEOTracker from './SEOAEOTracker.jsx'
-import { Menu, X as XIcon, Instagram, Linkedin, Music, MessageSquare, Settings as SettingsIcon, FileVideo, Sparkles, FileText, PenTool, Video, TrendingUp } from 'lucide-react'
+import ContentCalendarDay1 from './ContentCalendarDay1.jsx'
+import ContentCalendarDay2 from './ContentCalendarDay2.jsx'
+import ContentCalendarDay3 from './ContentCalendarDay3.jsx'
+import ContentCalendarDay4 from './ContentCalendarDay4.jsx'
+import { Menu, X as XIcon, Instagram, Linkedin, Music, MessageSquare, Settings as SettingsIcon, FileVideo, Sparkles, FileText, PenTool, Video, TrendingUp, Calendar, ChevronDown, ChevronRight } from 'lucide-react'
 import '../App.css'
 
 function Dashboard() {
@@ -35,6 +39,7 @@ function Dashboard() {
   const currentUser = authUtils.getCurrentUser()
   const [isVisible, setIsVisible] = useState({})
   const sectionRefs = useRef({})
+  const [openSubmenus, setOpenSubmenus] = useState({})
 
   // Handle URL parameters (for OAuth callbacks)
   useEffect(() => {
@@ -121,6 +126,17 @@ function Dashboard() {
     { id: 'veo-video', label: 'Video Generation', icon: Video },
     { id: 'seo-aeo-tracker', label: 'SEO/AEO Tracker', icon: TrendingUp },
     { id: 'brand-context', label: 'Brand Context', icon: FileText },
+    { 
+      id: '30-day-testing', 
+      label: '30 Day Testing', 
+      icon: Calendar,
+      children: [
+        { id: 'content-day-1', label: 'Day 1 - Text + Image', icon: Calendar },
+        { id: 'content-day-2', label: 'Day 2 - Video', icon: Calendar },
+        { id: 'content-day-3', label: 'Day 3 - Carousel', icon: Calendar },
+        { id: 'content-day-4', label: 'Day 4 - Thread', icon: Calendar },
+      ]
+    },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
     // Hidden for now - not implemented yet:
     // { id: 'document-video', label: 'Document Video', icon: FileVideo },
@@ -143,6 +159,14 @@ function Dashboard() {
         return <SEOAEOTracker />
       case 'brand-context':
         return <BrandContext />
+      case 'content-day-1':
+        return <ContentCalendarDay1 />
+      case 'content-day-2':
+        return <ContentCalendarDay2 />
+      case 'content-day-3':
+        return <ContentCalendarDay3 />
+      case 'content-day-4':
+        return <ContentCalendarDay4 />
       case 'document-video':
         return <DocumentVideo />
       case 'linkedin':
@@ -249,46 +273,117 @@ function Dashboard() {
           <div className="p-4 space-y-2">
             {socialMediaTabs.map((tab) => {
               const Icon = tab.icon
-              const isActive = activeTab === tab.id
+              const isActive = activeTab === tab.id || (tab.children && tab.children.some(child => activeTab === child.id))
+              const hasChildren = tab.children && tab.children.length > 0
+              const isSubmenuOpen = openSubmenus[tab.id] || false
+              
               return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={(e) => {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    console.log('Switching to tab:', tab.id)
-                    setActiveTab(tab.id)
-                  }}
-                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all smooth-hover ${
-                    isActive ? 'bg-[#1e293b] text-white' : 'text-[#4b5563] hover:bg-[#f5f5f5]'
-                  }`}
-                  style={{
-                    fontSize: '14px',
-                    fontWeight: isActive ? 500 : 400,
-                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                    cursor: 'pointer',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!isActive) {
-                      e.currentTarget.style.color = '#111827'
-                      e.currentTarget.style.transform = 'translateX(4px)'
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isActive) {
-                      e.currentTarget.style.color = '#4b5563'
-                      e.currentTarget.style.transform = 'translateX(0)'
-                    }
-                  }}
-                >
-                  {Icon ? (
-                      <Icon className="w-5 h-5" />
-                  ) : (
-                    <MessageSquare className="w-5 h-5" />
+                <div key={tab.id} className="space-y-1">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      if (hasChildren) {
+                        // Toggle submenu
+                        setOpenSubmenus(prev => ({
+                          ...prev,
+                          [tab.id]: !prev[tab.id]
+                        }))
+                      } else {
+                        console.log('Switching to tab:', tab.id)
+                        setActiveTab(tab.id)
+                      }
+                    }}
+                    className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all smooth-hover ${
+                      isActive ? 'bg-[#1e293b] text-white' : 'text-[#4b5563] hover:bg-[#f5f5f5]'
+                    }`}
+                    style={{
+                      fontSize: '14px',
+                      fontWeight: isActive ? 500 : 400,
+                      transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                      cursor: 'pointer',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.color = '#111827'
+                        e.currentTarget.style.transform = 'translateX(4px)'
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.color = '#4b5563'
+                        e.currentTarget.style.transform = 'translateX(0)'
+                      }
+                    }}
+                  >
+                    <div className="flex items-center gap-3">
+                      {Icon ? (
+                          <Icon className="w-5 h-5" />
+                      ) : (
+                        <MessageSquare className="w-5 h-5" />
+                      )}
+                      <span>{tab.label}</span>
+                    </div>
+                    {hasChildren && (
+                      isSubmenuOpen ? (
+                        <ChevronDown className="w-4 h-4" />
+                      ) : (
+                        <ChevronRight className="w-4 h-4" />
+                      )
+                    )}
+                  </button>
+                  
+                  {/* Submenu items */}
+                  {hasChildren && isSubmenuOpen && (
+                    <div className="pl-4 space-y-1 border-l-2 border-[#e5e7eb] ml-2">
+                      {tab.children.map((child) => {
+                        const ChildIcon = child.icon
+                        const isChildActive = activeTab === child.id
+                        return (
+                          <button
+                            key={child.id}
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              console.log('Switching to tab:', child.id)
+                              setActiveTab(child.id)
+                            }}
+                            className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg text-sm font-medium transition-all smooth-hover ${
+                              isChildActive ? 'bg-[#1e293b] text-white' : 'text-[#4b5563] hover:bg-[#f5f5f5]'
+                            }`}
+                            style={{
+                              fontSize: '13px',
+                              fontWeight: isChildActive ? 500 : 400,
+                              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                              cursor: 'pointer',
+                            }}
+                            onMouseEnter={(e) => {
+                              if (!isChildActive) {
+                                e.currentTarget.style.color = '#111827'
+                                e.currentTarget.style.transform = 'translateX(4px)'
+                              }
+                            }}
+                            onMouseLeave={(e) => {
+                              if (!isChildActive) {
+                                e.currentTarget.style.color = '#4b5563'
+                                e.currentTarget.style.transform = 'translateX(0)'
+                              }
+                            }}
+                          >
+                            {ChildIcon ? (
+                                <ChildIcon className="w-4 h-4" />
+                            ) : (
+                              <MessageSquare className="w-4 h-4" />
+                            )}
+                            <span>{child.label}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
                   )}
-                  <span>{tab.label}</span>
-                </button>
+                </div>
               )
             })}
           </div>

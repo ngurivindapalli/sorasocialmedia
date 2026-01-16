@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Image, Download, Copy, FileText, Loader2, CheckCircle2, XCircle, Hash, LogIn, UserPlus, LogOut, Lightbulb, X, Info } from 'lucide-react'
+import { Image, Download, Copy, FileText, Loader2, CheckCircle2, XCircle, Hash, LogIn, UserPlus, LogOut, Lightbulb, X, Info, Instagram, Linkedin } from 'lucide-react'
 import { api, API_URL } from '../utils/api'
 import { authUtils } from '../utils/auth'
 
 function MarketingPost() {
   const navigate = useNavigate()
   const [topic, setTopic] = useState('')
+  const [platform, setPlatform] = useState('instagram') // Default to Instagram
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
@@ -62,6 +63,7 @@ function MarketingPost() {
         caption_style: 'engaging', // Default style
         aspect_ratio: '1:1', // Default square format
         include_hashtags: true, // Always include hashtags
+        platform: platform, // Instagram or LinkedIn
         post_to_instagram: false, // Manual posting for now
       }, {
         timeout: 60000 // 60 second timeout for image generation
@@ -425,6 +427,48 @@ function MarketingPost() {
                   </p>
                 </div>
               )}
+
+              {/* Platform Selection */}
+              <div>
+                <label className="block text-sm font-semibold text-[#111827] mb-2">
+                  Platform
+                </label>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setPlatform('instagram')}
+                    className={`flex-1 px-4 py-3 rounded-lg border-2 transition-all ${
+                      platform === 'instagram'
+                        ? 'bg-[#1e293b] text-white border-[#1e293b]'
+                        : 'bg-white text-[#4b5563] border-[#e5e7eb] hover:border-[#1e293b]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center gap-2">
+                      <Instagram className="w-5 h-5" />
+                      <span className="font-medium">Instagram</span>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPlatform('linkedin')}
+                    className={`flex-1 px-4 py-3 rounded-lg border-2 transition-all ${
+                      platform === 'linkedin'
+                        ? 'bg-[#1e293b] text-white border-[#1e293b]'
+                        : 'bg-white text-[#4b5563] border-[#e5e7eb] hover:border-[#1e293b]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center gap-2">
+                      <Linkedin className="w-5 h-5" />
+                      <span className="font-medium">LinkedIn</span>
+                    </div>
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-[#4b5563]">
+                  {platform === 'instagram' 
+                    ? 'Instagram uses 10-20 hashtags for maximum reach'
+                    : 'LinkedIn uses 3-5 professional hashtags'}
+                </p>
+              </div>
 
               {/* Generate Button */}
               <button
