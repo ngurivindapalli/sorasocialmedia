@@ -1,0 +1,85 @@
+===========================================
+QUICK REFERENCE: Redirect URLs for aigismarketing.com
+===========================================
+
+ENVIRONMENT VARIABLES (Add to backend/.env and Render):
+-------------------------------------------------------
+BASE_URL=https://aigismarketing.com
+FRONTEND_URL=https://aigismarketing.com
+
+(If backend is on a subdomain like api.aigismarketing.com, use:
+ BASE_URL=https://api.aigismarketing.com
+ FRONTEND_URL=https://aigismarketing.com)
+
+===========================================
+REDIRECT URLs TO ADD IN EACH OAUTH PROVIDER:
+===========================================
+
+LINKEDIN:
+---------
+https://aigismarketing.com/api/oauth/linkedin/callback
+
+INSTAGRAM (Facebook):
+---------------------
+https://aigismarketing.com/api/oauth/instagram/callback
+
+X (Twitter):
+------------
+https://aigismarketing.com/api/oauth/x/callback
+
+TIKTOK:
+-------
+https://aigismarketing.com/api/oauth/tiktok/callback
+
+GOOGLE DRIVE:
+-------------
+https://aigismarketing.com/api/integrations/google_drive/callback
+
+NOTION:
+-------
+https://aigismarketing.com/api/integrations/notion/callback
+
+JIRA:
+-----
+https://aigismarketing.com/api/integrations/jira/callback
+
+===========================================
+IF BACKEND IS ON SUBDOMAIN (api.aigismarketing.com):
+===========================================
+
+LINKEDIN:
+---------
+https://api.aigismarketing.com/api/oauth/linkedin/callback
+
+INSTAGRAM:
+----------
+https://api.aigismarketing.com/api/oauth/instagram/callback
+
+X (Twitter):
+------------
+https://api.aigismarketing.com/api/oauth/x/callback
+
+TIKTOK:
+-------
+https://api.aigismarketing.com/api/oauth/tiktok/callback
+
+GOOGLE DRIVE:
+-------------
+https://api.aigismarketing.com/api/integrations/google_drive/callback
+
+NOTION:
+-------
+https://api.aigismarketing.com/api/integrations/notion/callback
+
+JIRA:
+-----
+https://api.aigismarketing.com/api/integrations/jira/callback
+
+===========================================
+TESTING:
+===========================================
+After adding redirect URLs, test OAuth flow:
+1. Go to https://aigismarketing.com/dashboard?tab=settings
+2. Click "Connect" for any platform
+3. Complete OAuth flow
+4. Should redirect back to: https://aigismarketing.com/dashboard?tab=settings&connected={platform}
