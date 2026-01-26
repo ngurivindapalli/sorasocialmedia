@@ -9,16 +9,16 @@ import XTools from './XTools.jsx'
 import GeneralChat from './GeneralChat.jsx'
 import Settings from './Settings.jsx'
 import BrandContext from './BrandContext.jsx'
-import DocumentVideo from './DocumentVideo.jsx'
+// import DocumentVideo from './DocumentVideo.jsx'  // Video generation removed
 import MarketingPost from './MarketingPost.jsx'
 import AigisMarketing from './AigisMarketing.jsx'
-import VeoVideo from './VeoVideo.jsx'
+// import VeoVideo from './VeoVideo.jsx'  // Video generation removed
 import SEOAEOTracker from './SEOAEOTracker.jsx'
 import ContentCalendarDay1 from './ContentCalendarDay1.jsx'
-import ContentCalendarDay2 from './ContentCalendarDay2.jsx'
+// import ContentCalendarDay2 from './ContentCalendarDay2.jsx'  // Video day removed
 import ContentCalendarDay3 from './ContentCalendarDay3.jsx'
 import ContentCalendarDay4 from './ContentCalendarDay4.jsx'
-import { Menu, X as XIcon, Instagram, Linkedin, Music, MessageSquare, Settings as SettingsIcon, FileVideo, Sparkles, FileText, PenTool, Video, TrendingUp, Calendar, ChevronDown, ChevronRight } from 'lucide-react'
+import { Menu, X as XIcon, Instagram, Linkedin, Music, MessageSquare, Settings as SettingsIcon, Sparkles, FileText, PenTool, TrendingUp, Calendar, ChevronDown, ChevronRight } from 'lucide-react'
 import '../App.css'
 
 function Dashboard() {
@@ -123,7 +123,7 @@ function Dashboard() {
     { id: 'chat', label: 'Chat', icon: null },
     { id: 'marketing-post', label: 'Marketing Post', icon: Sparkles },
     { id: 'aigis-marketing', label: 'Aigis Marketing', icon: PenTool },
-    { id: 'veo-video', label: 'Video Generation', icon: Video },
+    // { id: 'veo-video', label: 'Video Generation', icon: Video },  // Video generation removed - too expensive
     { id: 'seo-aeo-tracker', label: 'SEO/AEO Tracker', icon: TrendingUp },
     { id: 'brand-context', label: 'Brand Context', icon: FileText },
     { 
@@ -132,7 +132,7 @@ function Dashboard() {
       icon: Calendar,
       children: [
         { id: 'content-day-1', label: 'Day 1 - Text + Image', icon: Calendar },
-        { id: 'content-day-2', label: 'Day 2 - Video', icon: Calendar },
+        // { id: 'content-day-2', label: 'Day 2 - Video', icon: Calendar },  // Video removed
         { id: 'content-day-3', label: 'Day 3 - Carousel', icon: Calendar },
         { id: 'content-day-4', label: 'Day 4 - Thread', icon: Calendar },
       ]
@@ -153,22 +153,22 @@ function Dashboard() {
         return <MarketingPost />
       case 'aigis-marketing':
         return <AigisMarketing />
-      case 'veo-video':
-        return <VeoVideo />
+      // case 'veo-video':  // Video generation removed
+      //   return <VeoVideo />
       case 'seo-aeo-tracker':
         return <SEOAEOTracker />
       case 'brand-context':
         return <BrandContext />
       case 'content-day-1':
         return <ContentCalendarDay1 />
-      case 'content-day-2':
-        return <ContentCalendarDay2 />
+      // case 'content-day-2':  // Video day removed
+      //   return <ContentCalendarDay2 />
       case 'content-day-3':
         return <ContentCalendarDay3 />
       case 'content-day-4':
         return <ContentCalendarDay4 />
-      case 'document-video':
-        return <DocumentVideo />
+      // case 'document-video':  // Video generation removed
+      //   return <DocumentVideo />
       case 'linkedin':
         return <LinkedInTools />
       case 'instagram':

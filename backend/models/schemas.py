@@ -195,28 +195,43 @@ class MarketingPostRequest(BaseModel):
     aspect_ratio: Optional[str] = Field("1:1", description="Image aspect ratio")
     include_hashtags: Optional[bool] = Field(True, description="Whether to include hashtags")
     platform: Optional[str] = Field("instagram", description="Platform for the post (instagram or linkedin)")
+    image_prompt: Optional[str] = Field(None, description="Custom image prompt for generation")
+    caption: Optional[str] = Field(None, description="Custom caption for the post")
+    caption_style: Optional[str] = Field("engaging", description="Caption style: engaging, professional, casual, humorous, educational")
+    auto_post: Optional[bool] = Field(False, description="Whether to automatically post to social media")
 
 
 class MarketingPostSuggestion(BaseModel):
     """A single marketing post suggestion"""
     topic: str
-    caption: str
+    caption: Optional[str] = None
+    context: Optional[str] = None
+    reasoning: Optional[str] = None
+    score: Optional[float] = None
+    source: Optional[str] = None
     hashtags: Optional[List[str]] = None
 
 
 class MarketingPostResponse(BaseModel):
     """Response from marketing post creation"""
-    topic: str
-    caption: str
+    topic: Optional[str] = None
+    caption: Optional[str] = None
     image_base64: Optional[str] = None
     image_url: Optional[str] = None
+    image_prompt: Optional[str] = None
     hashtags: Optional[List[str]] = None
+    full_caption: Optional[str] = None
+    post_id: Optional[str] = None
+    post_url: Optional[str] = None
+    error: Optional[str] = None
+    is_first_post: Optional[bool] = None
     success: bool = True
 
 
 class MarketingPostSuggestionsResponse(BaseModel):
     """Response with multiple marketing post suggestions"""
     suggestions: List[MarketingPostSuggestion]
+    user_context_used: Optional[str] = None
 
 
 # ===== AIGIS MARKETING SCHEMAS =====
@@ -392,6 +407,9 @@ class IntegrationConnectionResponse(BaseModel):
     id: int
     platform: str
     connected: bool
+    platform_user_email: Optional[str] = None
+    connected_at: Optional[str] = None
+    last_synced_at: Optional[str] = None
 
 
 class NotionPageResponse(BaseModel):

@@ -251,12 +251,18 @@ class ImageGenerationService:
         Returns:
             Dict with image_url, revised_prompt, image_base64, and image data
         """
-        if model == "nanobanana" or model == "nano-banana" or model == "gemini-3-pro-image" or model == "imagen":
+        # Accept various Imagen model names
+        imagen_models = [
+            "nanobanana", "nano-banana", "gemini-3-pro-image", "imagen",
+            "imagen-4.0-generate-001", "imagen-4.0-ultra-generate-001", 
+            "imagen-4.0-fast-generate-001", "imagen-4", "imagen4"
+        ]
+        if model in imagen_models or model.startswith("imagen"):
             return await self._generate_nanobanana(prompt, size, quality, aspect_ratio)
         elif model == "stable-diffusion":
             return await self._generate_stable_diffusion(prompt, size)
         else:
-            raise Exception(f"Unsupported image generation model: {model}. Only 'imagen' (via Vertex AI) is supported. DALL-E has been removed.")
+            raise Exception(f"Unsupported image generation model: {model}. Supported: imagen, imagen-4.0-generate-001, nanobanana")
     
     async def _generate_nanobanana(
         self,

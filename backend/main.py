@@ -32,6 +32,7 @@ from services.google_drive_service import GoogleDriveService
 from services.jira_service import JiraService
 # Hyperspell removed - using MemoryService (S3 + Mem0) directly
 from utils.post_memory_helper import save_post_to_memory, is_first_post, get_post_performance_context, find_existing_post_with_image
+from utils.hyperspell_helper import get_memory_context
 from utils.veo_helper import wait_for_video_completion_with_extensions
 from utils.user_id_helper import normalize_user_id, get_user_id_from_request
 from services.web_research_service import WebResearchService
@@ -285,7 +286,17 @@ oauth_service = OAuthService()
 posting_service = PostingService()
 email_service = EmailService()
 browser_automation_service = BrowserAutomationService()
-veo3_service = Veo3Service()
+# VIDEO GENERATION DISABLED - Too expensive, focusing on images only
+# veo3_service = Veo3Service()
+class DisabledVeo3Service:
+    """Placeholder for disabled Veo3 service"""
+    project_id = None
+    _extension_cache = {}
+    async def generate_video(self, *args, **kwargs): raise Exception("Video generation is disabled")
+    async def get_video_status(self, *args, **kwargs): raise Exception("Video generation is disabled")
+    async def get_video_bytes(self, *args, **kwargs): raise Exception("Video generation is disabled")
+    async def extend_video_gemini_api(self, *args, **kwargs): raise Exception("Video generation is disabled")
+veo3_service = DisabledVeo3Service()
 image_generation_service = ImageGenerationService()
 video_composition_service = VideoCompositionService()
 document_service = DocumentService()
@@ -339,7 +350,7 @@ async def root():
             "video_generation": "✓ Active" if openai_service else "⚠ Disabled - OPENAI_API_KEY not set",
             "structured_outputs": "✓ Active" if openai_service else "⚠ Disabled",
             "vision_api": "✓ Active" if openai_service else "⚠ Disabled",
-            "veo3": "✓ Active" if veo3_service.project_id else "⚠ Disabled - GOOGLE_CLOUD_PROJECT_ID not set",
+            "veo3": "⛔ Disabled - Video generation turned off to reduce costs",
             "image_generation": "✓ Active" if image_generation_service.project_id else "⚠ Disabled - GOOGLE_CLOUD_PROJECT_ID not set",
             "gemini_3_pro_image": "✓ Active" if image_generation_service.project_id else "⚠ Disabled - GOOGLE_CLOUD_PROJECT_ID not set (uses Vertex AI)",
             "smart_composition": "✓ Active" if video_composition_service.openai_client else "⚠ Disabled",
@@ -2311,9 +2322,9 @@ async def get_integrations(
         IntegrationConnectionResponse(
             id=conn.id,
             platform=conn.platform,
+            connected=conn.is_active,
             platform_user_email=conn.platform_user_email,
-            is_active=conn.is_active,
-            connected_at=conn.connected_at.isoformat(),
+            connected_at=conn.connected_at.isoformat() if conn.connected_at else None,
             last_synced_at=conn.last_synced_at.isoformat() if conn.last_synced_at else None
         )
         for conn in connections
@@ -3921,86 +3932,50 @@ Return ONLY the image prompt text, no additional text."""
         elif not image_prompt:
             image_prompt = f"Professional marketing image about {request.topic}, high quality, social media style"
         
-        # Step 2: Use existing static images instead of generating new ones
-        # Load static posts JSON to get available images
-        import json
-        static_posts_path = os.path.join(BASE_DIR, "..", "frontend", "public", "static-posts", "posts.json")
+        # Step 2: Generate image using Google Imagen via Vertex AI
+        print(f"[API] 🎨 Generating image with Google Imagen...")
         image_result = None
         
         try:
-            with open(static_posts_path, 'r', encoding='utf-8') as f:
-                static_posts = json.load(f)
-            
-            # Find a matching post by topic (fuzzy match) or select a random one
-            matching_post = None
-            topic_lower = request.topic.lower()
-            
-            for post in static_posts:
-                if topic_lower in post.get("topic", "").lower() or post.get("topic", "").lower() in topic_lower:
-                    matching_post = post
-                    break
-            
-            # If no match, select a random post from the static images
-            if not matching_post:
-                import random
-                matching_post = random.choice(static_posts)
-                print(f"[API] No exact topic match, using random static image: {matching_post.get('topic')}")
-            else:
-                print(f"[API] ✓ Found matching static image for topic: {matching_post.get('topic')}")
-            
-            # Get the image path from the static post
-            # Ensure consistent path format: "/static-posts/images/marketing-post-X.png"
-            image_path = matching_post.get("image", "")
-            if image_path:
-                # Normalize to consistent format for both localhost and production
-                if image_path.startswith("images/"):
-                    # Format: "images/marketing-post-1.png" -> "/static-posts/images/marketing-post-1.png"
-                    static_image_url = f"/static-posts/{image_path}"
-                elif image_path.startswith("/static-posts/"):
-                    # Already in correct format
-                    static_image_url = image_path
-                elif image_path.startswith("/"):
-                    # Other absolute paths - keep as is
-                    static_image_url = image_path
+            # Use Imagen for image generation
+            if image_generation_service and image_generation_service.project_id:
+                # Map aspect ratios to sizes
+                aspect_ratio = request.aspect_ratio or "1:1"
+                if aspect_ratio == "16:9":
+                    size = "1792x1024"
+                elif aspect_ratio == "9:16":
+                    size = "1024x1792"
                 else:
-                    # Just filename - assume it's in images folder
-                    static_image_url = f"/static-posts/images/{image_path}"
+                    size = "1024x1024"
                 
-                # Read the static image file to get base64 for response
-                static_image_file = os.path.join(BASE_DIR, "..", "frontend", "public", "static-posts", image_path)
-                if os.path.exists(static_image_file):
-                    with open(static_image_file, 'rb') as f:
-                        import base64
-                        image_data = f.read()
-                        image_base64 = base64.b64encode(image_data).decode('utf-8')
-                    
-                    image_result = {
-                        "image_base64": image_base64,
-                        "image_url": static_image_url,
-                        "revised_prompt": image_prompt,
-                        "model": "static",
-                        "size": "1024x1024",
-                        "quality": "high",
-                        "aspect_ratio": request.aspect_ratio or "1:1"
-                    }
-                    print(f"[API] ✓ Using static image: {static_image_url}")
+                image_result = await image_generation_service.generate_image(
+                    prompt=image_prompt,
+                    model="imagen-4.0-generate-001",  # Use Imagen 4
+                    size=size,
+                    quality="high"
+                )
+                
+                if image_result and image_result.get("image_base64"):
+                    print(f"[API] ✓ Image generated with Google Imagen")
                 else:
-                    print(f"[API] ⚠️ Static image file not found: {static_image_file}")
+                    print(f"[API] ⚠️ Imagen generation returned no image")
+                    image_result = None
+            else:
+                print(f"[API] ⚠️ Image generation service not available")
         except Exception as e:
-            print(f"[API] ⚠️ Error loading static posts: {e}")
+            print(f"[API] ⚠️ Error generating image with Imagen: {e}")
             import traceback
             traceback.print_exc()
+            image_result = None
         
-        # Fallback: if static images couldn't be loaded, use a default
+        # Fallback: if image generation failed, create placeholder
         if not image_result:
-            print(f"[API] ⚠️ Could not load static images, using default")
-            # Use the first static image as fallback
-            default_image_url = "/static-posts/images/marketing-post-1.png"
+            print(f"[API] ⚠️ Image generation failed, using placeholder")
             image_result = {
-                "image_base64": None,  # Will be loaded by frontend
-                "image_url": default_image_url,
+                "image_base64": None,
+                "image_url": None,
                 "revised_prompt": image_prompt,
-                "model": "static",
+                "model": "placeholder",
                 "size": "1024x1024",
                 "quality": "high",
                 "aspect_ratio": request.aspect_ratio or "1:1"
@@ -4085,7 +4060,6 @@ IMPORTANT: Do NOT include hashtags in the caption. Return only the caption text 
                 # Caption should not contain hashtags (we'll generate them separately)
                 caption = generated_text.strip()
                 # Remove any hashtags that might have been included despite instructions
-                import re
                 caption = re.sub(r'#\w+\s*', '', caption).strip()
                 
                 print(f"[API] ✓ Caption generated ({len(caption)} chars)")
@@ -4248,59 +4222,20 @@ Return only the hashtags, one per line or comma-separated."""
             )
             
             if resource_id:
-                print(f"[API] ✓ Post saved to Hyperspell memory: {resource_id}")
+                print(f"[API] ✓ Post saved to memory: {resource_id}")
             else:
-                print(f"[API] ⚠️ Failed to save post to Hyperspell memory")
+                print(f"[API] ⚠️ Failed to save post to memory")
         else:
-            print(f"[API] ⚠️ Hyperspell not available, post not saved to memory")
+            print(f"[API] ⚠️ Memory service not available, post not saved to memory")
         
-        # Step 6: Optionally post to Instagram (using browser automation)
+        # Step 6: Optionally auto-post (currently disabled - returns image for manual posting)
         post_id = None
         post_url = None
         post_error = None
         
-        if request.post_to_instagram:
-            print(f"[API] 📱 Posting to Instagram...")
-            try:
-                if not request.instagram_username or not request.instagram_password:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Instagram username and password required for posting"
-                    )
-                
-                # Convert base64 image to file if needed
-                image_data = None
-                if image_result.get("image_base64"):
-                    import base64
-                    image_data = base64.b64decode(image_result["image_base64"])
-                elif image_result.get("image_url"):
-                    # Download image
-                    image_data = await image_generation_service.download_image(image_result["image_url"])
-                
-                if not image_data:
-                    raise HTTPException(status_code=500, detail="Could not get image data for posting")
-                
-                # Save to temp file
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
-                    temp_file.write(image_data)
-                    temp_image_path = temp_file.name
-                
-                try:
-                    # Use browser automation service (adapted for images)
-                    # Note: Browser automation currently supports videos, but we can adapt it
-                    # For now, we'll return the image and caption, and note that manual posting is recommended
-                    print(f"[API] ⚠️ Automatic image posting requires browser automation update")
-                    print(f"[API]   Image saved to: {temp_image_path}")
-                    print(f"[API]   Please post manually or use Instagram's web interface")
-                    post_error = "Automatic image posting not yet implemented. Please download the image and post manually."
-                finally:
-                    # Keep temp file for user to download/post manually
-                    # Don't delete it immediately
-                    pass
-            except Exception as e:
-                post_error = str(e)
-                print(f"[API] ❌ Instagram posting error: {e}")
+        if request.auto_post:
+            print(f"[API] 📱 Auto-posting requested but not implemented for images")
+            post_error = "Auto-posting images is not yet implemented. Please download the image and post manually."
         
         # Update post in memory if it was posted
         if post_id and memory_service.is_available():
@@ -4320,6 +4255,7 @@ Return only the hashtags, one per line or comma-separated."""
         
         response_data = {
             "success": True,
+            "topic": request.topic,
             "image_url": image_url,
             "image_base64": image_base64,  # Include for immediate display
             "image_prompt": image_prompt,
