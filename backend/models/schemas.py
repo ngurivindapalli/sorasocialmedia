@@ -119,6 +119,23 @@ class PostVideoResponse(BaseModel):
     errors: Optional[List[str]] = None
 
 
+class LinkedInCompanyPostRequest(BaseModel):
+    """Request to post to LinkedIn company page"""
+    caption: str = Field(..., description="Post text content")
+    image_url: Optional[str] = Field(None, description="URL of image to include")
+    image_base64: Optional[str] = Field(None, description="Base64 encoded image data")
+    access_token: Optional[str] = Field(None, description="OAuth access token (optional if stored)")
+
+
+class LinkedInCompanyPostResponse(BaseModel):
+    """Response from LinkedIn company post"""
+    success: bool
+    post_id: Optional[str] = None
+    post_url: Optional[str] = None
+    error: Optional[str] = None
+    platform: str = "linkedin"
+
+
 # ===== VEO 3 SCHEMAS =====
 class Veo3GenerateRequest(BaseModel):
     """Request to generate a Veo 3 video"""

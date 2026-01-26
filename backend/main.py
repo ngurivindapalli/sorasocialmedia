@@ -50,6 +50,7 @@ from models.schemas import (
     VideoAnalysisRequest, VideoAnalysisResponse, ScrapedVideo, VideoResult,
     UserSignupRequest, UserLoginRequest, SocialMediaConnectionResponse,
     PostVideoRequest, PostVideoResponse,
+    LinkedInCompanyPostRequest, LinkedInCompanyPostResponse,
     ManualInstagramPostRequest, ManualInstagramPostResponse,
     Veo3GenerateRequest, Veo3GenerateResponse, Veo3StatusResponse,
     Veo3ExtendRequest, Veo3ExtendResponse,
@@ -3082,6 +3083,210 @@ async def post_to_instagram_manual(
             message="Failed to post video",
             error=str(e)
         )
+
+
+@app.post("/api/post/linkedin/company", response_model=LinkedInCompanyPostResponse)
+async def post_to_linkedin_company(
+    request: LinkedInCompanyPostRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Post to LinkedIn company page (AIGIS page)
+    
+    This endpoint posts content directly to the configured LinkedIn company page.
+    The company page is configured via LINKEDIN_COMPANY_ID environment variable.
+    
+    Requires:
+    - LinkedIn OAuth access token with w_organization_social scope
+    - Or a stored connection with LinkedIn
+    """
+    try:
+        print(f"[API] LinkedIn company post requested")
+        print(f"[API] Caption length: {len(request.caption)} chars")
+        print(f"[API] Has image_url: {bool(request.image_url)}")
+        print(f"[API] Has image_base64: {bool(request.image_base64)}")
+        
+        # Get access token - either from request or stored connection
+        access_token = request.access_token
+        
+        if not access_token:
+            # Try to get from stored LinkedIn connection
+            linkedin_conn = db.query(SocialMediaConnection).filter(
+                SocialMediaConnection.platform == "linkedin",
+                SocialMediaConnection.is_active == True
+            ).first()
+            
+            if linkedin_conn:
+                access_token = linkedin_conn.access_token
+                print(f"[API] Using stored LinkedIn connection token")
+            else:
+                return LinkedInCompanyPostResponse(
+                    success=False,
+                    error="No LinkedIn access token provided and no active LinkedIn connection found. Please connect LinkedIn first."
+                )
+        
+        # Post to company page
+        result = await posting_service.post_to_linkedin_company(
+            access_token=access_token,
+            caption=request.caption,
+            image_url=request.image_url,
+            image_base64=request.image_base64
+        )
+        
+        if result.get("success"):
+            print(f"[API] ✓ LinkedIn company post created: {result.get('post_url')}")
+            
+            # Send email notification
+            email_service.send_video_posted_notification(
+                to_email=None,
+                username="AIGIS Company Page",
+                platform="linkedin",
+                post_url=result.get("post_url"),
+                video_url=None,
+                caption=request.caption[:200] + "..." if len(request.caption) > 200 else request.caption
+            )
+        else:
+            print(f"[API] ✗ LinkedIn company post failed: {result.get('error')}")
+        
+        return LinkedInCompanyPostResponse(
+            success=result.get("success", False),
+            post_id=result.get("post_id"),
+            post_url=result.get("post_url"),
+            error=result.get("error")
+        )
+        
+    except Exception as e:
+        print(f"[API] Error in LinkedIn company post: {e}")
+        import traceback
+        traceback.print_exc()
+        return LinkedInCompanyPostResponse(
+            success=False,
+            error=str(e)
+        )
+
+
+@app.get("/api/linkedin/auth-url")
+async def get_linkedin_auth_url():
+    """
+    Get the LinkedIn OAuth authorization URL
+    
+    The user should be redirected to this URL to authorize LinkedIn access.
+    After authorization, LinkedIn will redirect back to the callback URL.
+    """
+    try:
+        state = secrets.token_urlsafe(32)
+        auth_url = oauth_service.get_linkedin_auth_url(state)
+        return {
+            "auth_url": auth_url,
+            "state": state
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/oauth/linkedin/callback")
+async def linkedin_oauth_callback(
+    code: str = None,
+    state: str = None,
+    error: str = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Handle LinkedIn OAuth callback
+    
+    This endpoint receives the authorization code from LinkedIn
+    and exchanges it for an access token.
+    """
+    try:
+        if error:
+            print(f"[OAuth] LinkedIn authorization error: {error}")
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"LinkedIn authorization failed: {error}"}
+            )
+        
+        if not code:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "No authorization code received"}
+            )
+        
+        print(f"[OAuth] Exchanging LinkedIn code for token...")
+        token_data = await oauth_service.exchange_linkedin_code(code)
+        
+        if not token_data:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Failed to exchange authorization code"}
+            )
+        
+        # Store the connection
+        linkedin_conn = db.query(SocialMediaConnection).filter(
+            SocialMediaConnection.platform == "linkedin"
+        ).first()
+        
+        if linkedin_conn:
+            # Update existing connection
+            linkedin_conn.access_token = token_data["access_token"]
+            linkedin_conn.refresh_token = token_data.get("refresh_token")
+            linkedin_conn.account_id = token_data.get("user_id", "")
+            linkedin_conn.account_username = token_data.get("username", "LinkedIn User")
+            linkedin_conn.is_active = True
+            linkedin_conn.expires_at = datetime.utcnow() + timedelta(seconds=token_data.get("expires_in", 5184000))
+            print(f"[OAuth] Updated existing LinkedIn connection")
+        else:
+            # Create new connection
+            linkedin_conn = SocialMediaConnection(
+                platform="linkedin",
+                access_token=token_data["access_token"],
+                refresh_token=token_data.get("refresh_token"),
+                account_id=token_data.get("user_id", ""),
+                account_username=token_data.get("username", "LinkedIn User"),
+                is_active=True,
+                expires_at=datetime.utcnow() + timedelta(seconds=token_data.get("expires_in", 5184000))
+            )
+            db.add(linkedin_conn)
+            print(f"[OAuth] Created new LinkedIn connection")
+        
+        db.commit()
+        
+        # Redirect to frontend success page
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3001")
+        return JSONResponse(
+            content={
+                "success": True,
+                "message": "LinkedIn connected successfully!",
+                "username": token_data.get("username", "LinkedIn User"),
+                "redirect_url": f"{frontend_url}/settings?linkedin=connected"
+            }
+        )
+        
+    except Exception as e:
+        print(f"[OAuth] LinkedIn callback error: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+
+@app.get("/api/linkedin/company-info")
+async def get_linkedin_company_info():
+    """Get configured LinkedIn company page information"""
+    company_id = os.getenv("LINKEDIN_COMPANY_ID", "")
+    if not company_id:
+        return {
+            "configured": False,
+            "error": "LINKEDIN_COMPANY_ID not set in environment"
+        }
+    
+    return {
+        "configured": True,
+        "company_id": company_id,
+        "company_url": f"https://www.linkedin.com/company/{company_id}/",
+        "company_name": "AIGIS"  # Hardcoded for now, could be fetched from LinkedIn API
+    }
 
 
 @app.put("/api/user/email-notifications")

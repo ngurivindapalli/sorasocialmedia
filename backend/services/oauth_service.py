@@ -98,12 +98,17 @@ class OAuthService:
     
     def get_linkedin_auth_url(self, state: str) -> str:
         """Get LinkedIn OAuth authorization URL"""
+        # Scopes:
+        # - openid, profile, email: Basic profile info
+        # - w_member_social: Post to personal profile
+        # - w_organization_social: Post to company/organization pages
+        # - r_organization_social: Read organization posts
         params = {
             "response_type": "code",
             "client_id": self.linkedin_client_id,
             "redirect_uri": self.linkedin_redirect_uri,
             "state": state,
-            "scope": "openid profile email w_member_social"
+            "scope": "openid profile email w_member_social w_organization_social r_organization_social"
         }
         return f"https://www.linkedin.com/oauth/v2/authorization?{urlencode(params)}"
     

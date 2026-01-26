@@ -9,6 +9,8 @@ import SEOAEOTracker from './pages/SEOAEOTracker'
 import TermsOfService from './pages/TermsOfService'
 import PrivacyPolicy from './pages/PrivacyPolicy'
 import ProtectedRoute from './components/ProtectedRoute'
+import ContentCalendar from './pages/ContentCalendar'
+import ContentCalendarView from './pages/ContentCalendarView'
 import './App.css'
 
 function App() {
@@ -17,15 +19,16 @@ function App() {
       <Routes>
         {/* Routes */}
         <Route path="/" element={<LandingPage />} />
-        <Route path="/landing" element={<LandingPage />} />
-        <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
-        <Route path="/terms-of-service" element={<TermsOfService />} />
-        <Route path="/privacy-policy" element={<PrivacyPolicy />} />
-        <Route path="/marketing-post" element={<MarketingPost />} />
+        <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+        <Route path="/marketing-post" element={<ProtectedRoute><MarketingPost /></ProtectedRoute>} />
+        <Route path="/seo-aeo" element={<ProtectedRoute><SEOAEOTracker /></ProtectedRoute>} />
+        <Route path="/content-calendar" element={<ProtectedRoute><ContentCalendar /></ProtectedRoute>} />
+        <Route path="/content-calendar/day/:day" element={<ProtectedRoute><ContentCalendarView /></ProtectedRoute>} />
+        <Route path="/terms" element={<TermsOfService />} />
+        <Route path="/privacy" element={<PrivacyPolicy />} />
         {/* Hyperspell route removed - using MemoryService (S3 + Mem0) directly */}
-        <Route path="/seo-aeo-tracker" element={<SEOAEOTracker />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Router>

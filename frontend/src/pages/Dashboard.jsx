@@ -14,10 +14,10 @@ import MarketingPost from './MarketingPost.jsx'
 import AigisMarketing from './AigisMarketing.jsx'
 // import VeoVideo from './VeoVideo.jsx'  // Video generation removed
 import SEOAEOTracker from './SEOAEOTracker.jsx'
-import ContentCalendarDay1 from './ContentCalendarDay1.jsx'
-// import ContentCalendarDay2 from './ContentCalendarDay2.jsx'  // Video day removed
-import ContentCalendarDay3 from './ContentCalendarDay3.jsx'
-import ContentCalendarDay4 from './ContentCalendarDay4.jsx'
+// Content calendar day components moved to dedicated routes
+// import ContentCalendarDay1 from './ContentCalendarDay1.jsx'
+// import ContentCalendarDay3 from './ContentCalendarDay3.jsx'
+// import ContentCalendarDay4 from './ContentCalendarDay4.jsx'
 import { Menu, X as XIcon, Instagram, Linkedin, Music, MessageSquare, Settings as SettingsIcon, Sparkles, FileText, PenTool, TrendingUp, Calendar, ChevronDown, ChevronRight } from 'lucide-react'
 import '../App.css'
 
@@ -127,15 +127,11 @@ function Dashboard() {
     { id: 'seo-aeo-tracker', label: 'SEO/AEO Tracker', icon: TrendingUp },
     { id: 'brand-context', label: 'Brand Context', icon: FileText },
     { 
-      id: '30-day-testing', 
-      label: '30 Day Testing', 
+      id: '30-day-calendar', 
+      label: '30 Day Content', 
       icon: Calendar,
-      children: [
-        { id: 'content-day-1', label: 'Day 1 - Text + Image', icon: Calendar },
-        // { id: 'content-day-2', label: 'Day 2 - Video', icon: Calendar },  // Video removed
-        { id: 'content-day-3', label: 'Day 3 - Carousel', icon: Calendar },
-        { id: 'content-day-4', label: 'Day 4 - Thread', icon: Calendar },
-      ]
+      isExternalLink: true,
+      href: '/content-calendar'
     },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
     // Hidden for now - not implemented yet:
@@ -159,14 +155,10 @@ function Dashboard() {
         return <SEOAEOTracker />
       case 'brand-context':
         return <BrandContext />
-      case 'content-day-1':
-        return <ContentCalendarDay1 />
-      // case 'content-day-2':  // Video day removed
-      //   return <ContentCalendarDay2 />
-      case 'content-day-3':
-        return <ContentCalendarDay3 />
-      case 'content-day-4':
-        return <ContentCalendarDay4 />
+      // Content calendar moved to dedicated route /content-calendar
+      case '30-day-calendar':
+        navigate('/content-calendar')
+        return null
       // case 'document-video':  // Video generation removed
       //   return <DocumentVideo />
       case 'linkedin':
@@ -284,7 +276,10 @@ function Dashboard() {
                     onClick={(e) => {
                       e.preventDefault()
                       e.stopPropagation()
-                      if (hasChildren) {
+                      if (tab.isExternalLink && tab.href) {
+                        // Navigate to external route
+                        navigate(tab.href)
+                      } else if (hasChildren) {
                         // Toggle submenu
                         setOpenSubmenus(prev => ({
                           ...prev,

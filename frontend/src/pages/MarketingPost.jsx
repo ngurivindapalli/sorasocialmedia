@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Image, Download, Copy, FileText, Loader2, CheckCircle2, XCircle, Hash, LogIn, UserPlus, LogOut, Lightbulb, X, Info, Instagram, Linkedin } from 'lucide-react'
+import { Image, Download, Copy, FileText, Loader2, CheckCircle2, XCircle, Hash, LogIn, UserPlus, LogOut, Lightbulb, X, Info, Instagram, Linkedin, ExternalLink } from 'lucide-react'
 import { api, API_URL } from '../utils/api'
 import { authUtils } from '../utils/auth'
 
 function MarketingPost() {
   const navigate = useNavigate()
   const [topic, setTopic] = useState('')
-  const [platform, setPlatform] = useState('instagram') // Default to Instagram
+  const [platform, setPlatform] = useState('linkedin') // Default to LinkedIn
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
@@ -15,6 +15,8 @@ function MarketingPost() {
   const [suggestions, setSuggestions] = useState([])
   const [loadingSuggestions, setLoadingSuggestions] = useState(false)
   const [showSuggestions, setShowSuggestions] = useState(false)
+  const [postingToLinkedIn, setPostingToLinkedIn] = useState(false)
+  const [postSuccess, setPostSuccess] = useState(null)
   
   // Get current user from localStorage
   const [currentUser, setCurrentUser] = useState(() => {
@@ -207,6 +209,40 @@ function MarketingPost() {
         link.click()
         document.body.removeChild(link)
       }
+    }
+  }
+
+  const handlePostToLinkedIn = async () => {
+    if (!result?.image_base64 && !result?.image_url) {
+      setError('No image available to post. Please generate content first.')
+      return
+    }
+
+    setPostingToLinkedIn(true)
+    setError(null)
+    setPostSuccess(null)
+
+    try {
+      const postData = {
+        caption: result.full_caption || result.caption || '',
+        image_base64: result.image_base64 || null,
+        image_url: result.image_url || null
+      }
+
+      const response = await api.post('/api/post/linkedin/company', postData, {
+        timeout: 60000 // 60 second timeout
+      })
+      
+      if (response.data.success) {
+        setPostSuccess(response.data.post_url || 'Posted to AIGIS company page successfully!')
+      } else {
+        setError(response.data.error || 'Failed to post to LinkedIn company page')
+      }
+    } catch (err) {
+      console.error('Error posting to LinkedIn:', err)
+      setError(err.response?.data?.detail || err.response?.data?.error || err.message || 'Failed to post to LinkedIn company page.')
+    } finally {
+      setPostingToLinkedIn(false)
     }
   }
 
@@ -533,13 +569,57 @@ function MarketingPost() {
                       <Image className="w-16 h-16 text-gray-400" />
                     )}
                   </div>
-                  <button
-                    onClick={handleDownloadImage}
-                    className="mt-3 w-full bg-[#1e293b] hover:bg-[#334155] text-white py-2 rounded-lg transition-all flex items-center justify-center gap-2"
-                  >
-                    <Download className="w-4 h-4" />
-                    Download Image
-                  </button>
+                  <div className="mt-3 space-y-2">
+                    <button
+                      onClick={handleDownloadImage}
+                      className="w-full bg-[#1e293b] hover:bg-[#334155] text-white py-2 rounded-lg transition-all flex items-center justify-center gap-2"
+                    >
+                      <Download className="w-4 h-4" />
+                      Download Image
+                    </button>
+                    
+                    {/* Post to LinkedIn Company Page */}
+                    {platform === 'linkedin' && (result.image_url || result.image_base64) && (
+                      <button
+                        onClick={handlePostToLinkedIn}
+                        disabled={postingToLinkedIn}
+                        className="w-full bg-[#0077b5] hover:bg-[#005885] text-white py-2 rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {postingToLinkedIn ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Posting to LinkedIn...
+                          </>
+                        ) : (
+                          <>
+                            <Linkedin className="w-4 h-4" />
+                            Post to AIGIS Company Page
+                          </>
+                        )}
+                      </button>
+                    )}
+                    
+                    {/* Post Success Message */}
+                    {postSuccess && (
+                      <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm">
+                        <p className="font-medium flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4" />
+                          Posted to LinkedIn successfully!
+                        </p>
+                        {postSuccess.startsWith('http') && (
+                          <a 
+                            href={postSuccess} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-green-800 underline hover:no-underline mt-1 flex items-center gap-1"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            View Post on LinkedIn
+                          </a>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Image Prompt Used */}
@@ -596,13 +676,16 @@ function MarketingPost() {
                 {/* Post Info */}
                 {result.post_url && (
                   <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                    <p className="text-sm font-semibold text-green-600 mb-1">Posted to Instagram</p>
+                    <p className="text-sm font-semibold text-green-600 mb-1">
+                      Posted to {platform === 'linkedin' ? 'LinkedIn' : 'Instagram'}
+                    </p>
                     <a
                       href={result.post_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-sm text-green-700 hover:underline"
+                      className="text-sm text-green-700 hover:underline flex items-center gap-1"
                     >
+                      <ExternalLink className="w-3 h-3" />
                       View Post →
                     </a>
                   </div>
