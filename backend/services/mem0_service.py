@@ -60,13 +60,15 @@ class Mem0Service:
             # Configure based on vector_db type
             if not mem0_config:
                 if vector_db == 's3_vectors' and aws_access_key and aws_secret_key and aws_bucket:
-                    # Use S3 for vector storage (persistent across deployments)
-                    # AWS credentials should be set via environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
-                    # Mem0 will automatically use them from environment
-                    # Mem0 S3 vectors configuration
-                    # Try different index name formats - S3 Vectors may have naming restrictions
-                    # Index names must be lowercase, alphanumeric, and may have length restrictions
-                    index_name = "mem0memories"  # Simplified name without underscores
+                    # Use S3 Vectors for persistent storage (survives deployments)
+                    # AWS credentials should be set via environment variables
+                    # Index names must be lowercase, alphanumeric, 3-63 chars
+                    index_name = "mem0memories"
+                    
+                    # Ensure AWS credentials are in environment for Mem0/boto3 to use
+                    os.environ['AWS_ACCESS_KEY_ID'] = aws_access_key
+                    os.environ['AWS_SECRET_ACCESS_KEY'] = aws_secret_key
+                    os.environ['AWS_DEFAULT_REGION'] = aws_region
                     
                     mem0_config = {
                         "vector_store": {
@@ -74,19 +76,14 @@ class Mem0Service:
                             "config": {
                                 "vector_bucket_name": aws_bucket,
                                 "collection_name": index_name,
+                                "embedding_model_dims": 1536,  # OpenAI embedding dimensions
+                                "distance_metric": "cosine",
                                 "region_name": aws_region
-                                # AWS credentials should be in environment variables
                             }
                         }
                     }
                     print(f"[Mem0] Configuring S3 vectors with bucket: {aws_bucket}, index: {index_name}, region: {aws_region}")
-                    # Ensure AWS credentials are in environment for Mem0 to use
-                    if aws_access_key:
-                        os.environ['AWS_ACCESS_KEY_ID'] = aws_access_key
-                    if aws_secret_key:
-                        os.environ['AWS_SECRET_ACCESS_KEY'] = aws_secret_key
-                    print(f"[Mem0] Configuring S3 vectors with bucket: {aws_bucket} (region: {aws_region})")
-                    print(f"[Mem0] AWS credentials will be read from environment variables")
+                    print(f"[Mem0] AWS credentials configured in environment")
                 else:
                     # Fallback to ChromaDB with persistent directory
                     backend_dir = Path(__file__).parent.parent
@@ -129,6 +126,8 @@ class Mem0Service:
                                     "config": {
                                         "vector_bucket_name": aws_bucket,
                                         "collection_name": alt_index,
+                                        "embedding_model_dims": 1536,
+                                        "distance_metric": "cosine",
                                         "region_name": aws_region
                                     }
                                 }
@@ -188,23 +187,31 @@ class Mem0Service:
             if vector_db == 's3_vectors':
                 print(f"[Mem0] SUCCESS: Memories will persist across deployments and restarts")
             
-            # Verify S3 connection if using S3
+            # Verify S3 Vectors connection if using S3 vectors
             if vector_db == 's3_vectors' and self.available:
                 try:
-                    # Try to verify S3 access by checking if we can list the bucket
+                    # Try to verify S3 Vectors access
                     import boto3
-                    s3_client = boto3.client(
-                        's3',
-                        aws_access_key_id=aws_access_key,
-                        aws_secret_access_key=aws_secret_key,
-                        region_name=aws_region
-                    )
-                    # Try to head the bucket to verify access
-                    s3_client.head_bucket(Bucket=aws_bucket)
-                    print(f"[Mem0] SUCCESS: S3 bucket access verified: {aws_bucket}")
-                except Exception as s3_error:
-                    print(f"[Mem0] WARNING: Could not verify S3 bucket access: {s3_error}")
-                    print(f"[Mem0] Memories may not persist correctly. Check IAM permissions.")
+                    # S3 Vectors uses a different service endpoint
+                    try:
+                        s3vectors_client = boto3.client(
+                            's3vectors',
+                            aws_access_key_id=aws_access_key,
+                            aws_secret_access_key=aws_secret_key,
+                            region_name=aws_region
+                        )
+                        # Try to list vector buckets to verify access
+                        response = s3vectors_client.list_vector_buckets()
+                        print(f"[Mem0] SUCCESS: S3 Vectors access verified. Found {len(response.get('vectorBuckets', []))} vector bucket(s)")
+                    except Exception as s3v_error:
+                        if 'UnknownServiceError' in str(type(s3v_error).__name__) or 'Unknown service' in str(s3v_error):
+                            print(f"[Mem0] WARNING: S3 Vectors service not available in boto3. Using Mem0's built-in S3 Vectors support.")
+                        else:
+                            print(f"[Mem0] WARNING: Could not verify S3 Vectors access: {s3v_error}")
+                            print(f"[Mem0] Ensure IAM policy includes s3vectors:* permissions")
+                except Exception as verify_error:
+                    print(f"[Mem0] WARNING: Could not verify S3 Vectors access: {verify_error}")
+                    print(f"[Mem0] Memories may not persist correctly. Check IAM permissions (s3vectors:*).")
             
         except Exception as e:
             print(f"[Mem0] ERROR: Error initializing Mem0 service: {e}")
