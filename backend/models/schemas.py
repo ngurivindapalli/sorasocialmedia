@@ -415,7 +415,10 @@ class UserContextResponse(BaseModel):
 
 class FindCompetitorsRequest(BaseModel):
     """Request to find competitors"""
-    industry: str
+    document_id: Optional[str] = None
+    website_url: Optional[str] = None
+    use_context: Optional[bool] = False
+    industry: Optional[str] = None
     location: Optional[str] = None
 
 

@@ -6087,18 +6087,46 @@ async def get_document_text(document_id: str):
 
 
 @app.post("/api/competitors/find")
-async def find_competitors(request: FindCompetitorsRequest):
+async def find_competitors(
+    request: FindCompetitorsRequest,
+    current_user: User = Depends(get_current_user)
+):
     """
-    Find competitors based on brand context document.
-    Analyzes the document to understand the brand and suggests relevant competitors.
+    Find competitors based on brand context document, website, or stored memory context.
+    Analyzes the context to understand the brand and suggests relevant competitors.
     """
     try:
         document_id = request.document_id
+        website_url = request.website_url
+        use_context = request.use_context
         
-        # Get document text
-        document_text = document_service.get_document_text(document_id)
-        if not document_text:
-            raise HTTPException(status_code=404, detail="Document not found or has no text content")
+        document_text = ""
+        
+        # Priority: document_id > use_context (memory) > website_url
+        if document_id:
+            # Get document text
+            document_text = document_service.get_document_text(document_id)
+            if not document_text:
+                raise HTTPException(status_code=404, detail="Document not found or has no text content")
+            print(f"[API] Finding competitors based on document: {document_id}")
+        elif use_context and current_user:
+            # Get context from user's stored memories
+            user_id = normalize_user_id(current_user)
+            print(f"[API] Finding competitors using stored context for user: {user_id}")
+            document_text = await memory_service.get_all_memories_context(user_id)
+            if not document_text or len(document_text.strip()) < 50:
+                raise HTTPException(status_code=400, detail="No brand context found. Please add a website or upload a document first.")
+        elif website_url:
+            # Scrape website for context (fallback)
+            print(f"[API] Finding competitors based on website: {website_url}")
+            # Use existing scraped context from memory
+            if current_user:
+                user_id = normalize_user_id(current_user)
+                document_text = await memory_service.get_all_memories_context(user_id)
+            if not document_text or len(document_text.strip()) < 50:
+                raise HTTPException(status_code=400, detail="No brand context found for this website. Please re-analyze the website.")
+        else:
+            raise HTTPException(status_code=400, detail="Please provide a document_id, website_url, or set use_context=true")
         
         if not openai_service:
             raise HTTPException(
@@ -6106,13 +6134,12 @@ async def find_competitors(request: FindCompetitorsRequest):
                 detail="OpenAI API key is required for competitor analysis. Please set OPENAI_API_KEY in your backend/.env file."
             )
         
-        print(f"[API] Finding competitors based on document: {document_id}")
-        print(f"[API] Document text length: {len(document_text)} characters")
+        print(f"[API] Context text length: {len(document_text)} characters")
         
         # Use OpenAI to analyze brand context and find competitors
-        prompt = f"""Based on the following brand context document, identify and suggest relevant competitors that this brand would be trying to beat or learn from.
+        prompt = f"""Based on the following brand context, identify and suggest relevant competitors that this brand would be trying to beat or learn from.
 
-BRAND CONTEXT DOCUMENT:
+BRAND CONTEXT:
 {document_text[:8000]}  # Limit to 8000 chars to avoid token limits
 
 Your task:
@@ -6176,7 +6203,8 @@ Focus on competitors that would be valuable to analyze and learn from. Be specif
         
         return {
             "competitors": competitors,
-            "document_id": document_id
+            "document_id": document_id,
+            "source": "document" if document_id else ("context" if use_context else "website")
         }
         
     except json.JSONDecodeError as e:

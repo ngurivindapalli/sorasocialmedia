@@ -715,8 +715,8 @@ function BrandContext() {
   }
 
   const handleFindCompetitors = async () => {
-    if (sentDocuments.length === 0) {
-      setError('Please upload and send a brand context document first to find competitors.')
+    if (sentDocuments.length === 0 && scrapedWebsites.length === 0) {
+      setError('Please upload a document or add a website first to find competitors.')
       return
     }
 
@@ -724,10 +724,18 @@ function BrandContext() {
       setFindingCompetitors(true)
       setError('')
       
-      const mostRecentDoc = sentDocuments[sentDocuments.length - 1]
-      const response = await api.post('/api/competitors/find', {
-        document_id: mostRecentDoc.id
-      })
+      // Use document if available, otherwise use website context
+      let requestData = {}
+      if (sentDocuments.length > 0) {
+        const mostRecentDoc = sentDocuments[sentDocuments.length - 1]
+        requestData = { document_id: mostRecentDoc.id }
+      } else if (scrapedWebsites.length > 0) {
+        // Use website URL for context-based competitor finding
+        const mostRecentWebsite = scrapedWebsites[scrapedWebsites.length - 1]
+        requestData = { website_url: mostRecentWebsite.url, use_context: true }
+      }
+      
+      const response = await api.post('/api/competitors/find', requestData)
       
       if (response.data?.competitors && response.data.competitors.length > 0) {
         setFoundCompetitors(response.data.competitors)
@@ -1410,7 +1418,7 @@ function BrandContext() {
 
             <button
               onClick={handleFindCompetitors}
-              disabled={findingCompetitors || sentDocuments.length === 0}
+              disabled={findingCompetitors || (sentDocuments.length === 0 && scrapedWebsites.length === 0)}
               className="w-full px-4 py-3 bg-[#1e293b] hover:bg-[#334155] disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center justify-center gap-2"
             >
               <Search className="w-5 h-5" />
