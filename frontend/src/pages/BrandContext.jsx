@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { FileText, Upload, X, Search, Plus, AlertCircle, ChevronDown, ChevronUp, Link2, CheckCircle2, Loader2, BookOpen, Users, TrendingUp, BarChart3 } from 'lucide-react'
+import { FileText, Upload, X, Search, Plus, AlertCircle, ChevronDown, ChevronUp, Link2, CheckCircle2, Loader2, BookOpen, Users, TrendingUp, BarChart3, Globe } from 'lucide-react'
 import { api } from '../utils/api'
 import { authUtils } from '../utils/auth'
+import LoadingOverlay from '../components/LoadingOverlay'
 
 function BrandContext() {
   const [user, setUser] = useState(null)
@@ -23,6 +24,12 @@ function BrandContext() {
   const [foundCompetitors, setFoundCompetitors] = useState([])
   const [showFoundCompetitors, setShowFoundCompetitors] = useState(false)
   const [competitorsDropdownOpen, setCompetitorsDropdownOpen] = useState(false)
+  
+  // Website scraping state
+  const [websiteUrl, setWebsiteUrl] = useState('')
+  const [scrapingWebsite, setScrapingWebsite] = useState(false)
+  const [scrapedWebsites, setScrapedWebsites] = useState([])
+  const [websiteScrapeSuccess, setWebsiteScrapeSuccess] = useState('')
   
   // Integration state
   const [integrations, setIntegrations] = useState([])
@@ -85,6 +92,11 @@ function BrandContext() {
       const savedCompetitors = localStorage.getItem('videohook_competitors')
       if (savedCompetitors) {
         setCompetitors(JSON.parse(savedCompetitors))
+      }
+      
+      const savedWebsites = localStorage.getItem('videohook_scraped_websites')
+      if (savedWebsites) {
+        setScrapedWebsites(JSON.parse(savedWebsites))
       }
     } catch (err) {
       console.error('Failed to load brand context and competitors:', err)
@@ -813,6 +825,81 @@ function BrandContext() {
     }
   }
 
+  const handleScrapeWebsite = async () => {
+    if (!websiteUrl.trim()) {
+      setError('Please enter a website URL')
+      return
+    }
+
+    // Basic URL validation
+    let url = websiteUrl.trim()
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'https://' + url
+    }
+
+    try {
+      new URL(url)
+    } catch {
+      setError('Please enter a valid website URL')
+      return
+    }
+
+    setScrapingWebsite(true)
+    setError('')
+    setWebsiteScrapeSuccess('')
+
+    try {
+      console.log('[BrandContext] Scraping website:', url)
+      
+      const response = await api.post('/api/brand/scrape-website', {
+        url: url
+      }, {
+        timeout: 120000 // 2 minute timeout for website scraping
+      })
+
+      if (response.data?.success) {
+        // Save scraped website to list
+        const newWebsite = {
+          url: url,
+          scrapedAt: new Date().toISOString(),
+          title: response.data.title || url,
+          description: response.data.description || '',
+          resourceId: response.data.resource_id
+        }
+        
+        const updated = [...scrapedWebsites, newWebsite]
+        setScrapedWebsites(updated)
+        localStorage.setItem('videohook_scraped_websites', JSON.stringify(updated))
+        
+        setWebsiteScrapeSuccess(`Website "${response.data.title || url}" analyzed and added to brand context!`)
+        setWebsiteUrl('')
+        
+        // Reload summaries after scraping
+        setTimeout(async () => {
+          await loadSummaries()
+        }, 2000)
+        
+        // Clear success message after 5 seconds
+        setTimeout(() => {
+          setWebsiteScrapeSuccess('')
+        }, 5000)
+      } else {
+        setError(response.data.error || 'Failed to scrape website')
+      }
+    } catch (err) {
+      console.error('Failed to scrape website:', err)
+      setError(err.response?.data?.detail || err.message || 'Failed to analyze website. Please check the URL and try again.')
+    } finally {
+      setScrapingWebsite(false)
+    }
+  }
+
+  const handleRemoveWebsite = (urlToRemove) => {
+    const updated = scrapedWebsites.filter(w => w.url !== urlToRemove)
+    setScrapedWebsites(updated)
+    localStorage.setItem('videohook_scraped_websites', JSON.stringify(updated))
+  }
+
   if (loading) {
     return (
       <div className="p-6">
@@ -829,13 +916,22 @@ function BrandContext() {
   ]
 
   return (
-    <div className="p-6 max-w-6xl mx-auto bg-white">
+    <div className="p-6 max-w-6xl mx-auto bg-white relative">
+      {/* Loading Overlay for Summaries */}
+      <LoadingOverlay 
+        isLoading={loadingSummaries} 
+        type="context" 
+        message="Gathering brand context..."
+        subMessage="Analyzing your documents and summarizing key brand information. This may take a moment."
+        fullScreen={true}
+      />
+      
       <div className="mb-8">
         <h1 className="text-3xl font-semibold text-[#111827] mb-2 flex items-center gap-3">
           <FileText className="w-8 h-8 text-[#1e293b]" />
-          Brand Context
+          Brand Context Information
         </h1>
-        <p className="text-[#4b5563]">Manage your brand context, competitors, and integrations</p>
+        <p className="text-[#4b5563]">Manage your brand context, website data, competitors, and integrations</p>
       </div>
 
       {/* Summary Tabs */}
@@ -953,9 +1049,107 @@ function BrandContext() {
       )}
 
       <div className="space-y-8">
+        {/* Website Scraping Section */}
+        <div className="bg-white rounded-lg border border-[#e5e7eb] p-6">
+          <div className="flex items-center gap-2 mb-2">
+            <Globe className="w-5 h-5 text-[#1e293b]" />
+            <h2 className="text-xl font-semibold text-[#111827]">Brand Website</h2>
+          </div>
+          <p className="text-sm text-[#4b5563] mb-6">
+            Add your brand's website to automatically analyze and extract brand information, messaging, and context
+          </p>
+
+          {/* Website Scrape Success Message */}
+          {websiteScrapeSuccess && (
+            <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg flex items-start gap-2">
+              <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+              <p className="text-sm text-green-700 flex-1">{websiteScrapeSuccess}</p>
+              <button
+                onClick={() => setWebsiteScrapeSuccess('')}
+                className="ml-auto text-green-600 hover:text-green-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          <div className="space-y-4">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={websiteUrl}
+                onChange={(e) => setWebsiteUrl(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleScrapeWebsite()}
+                placeholder="https://yourcompany.com"
+                className="flex-1 px-4 py-3 border border-[#e5e7eb] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e293b] focus:border-transparent"
+                disabled={scrapingWebsite}
+              />
+              <button
+                onClick={handleScrapeWebsite}
+                disabled={scrapingWebsite || !websiteUrl.trim()}
+                className="px-6 py-3 bg-[#1e293b] hover:bg-[#334155] disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center gap-2 font-medium"
+              >
+                {scrapingWebsite ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Analyzing...
+                  </>
+                ) : (
+                  <>
+                    <Globe className="w-5 h-5" />
+                    Analyze Website
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Analyzed Websites List */}
+            {scrapedWebsites.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-[#4b5563]">Connected Websites:</p>
+                {scrapedWebsites.map((website, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center justify-between p-3 bg-[#f9fafb] border border-[#e5e7eb] rounded-lg"
+                  >
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <Globe className="w-4 h-4 text-[#1e293b] flex-shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-[#111827] truncate">
+                          {website.title || website.url}
+                        </p>
+                        <p className="text-xs text-[#6b7280] truncate">
+                          {website.url}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="text-xs text-[#9ca3af]">
+                        Added {new Date(website.scrapedAt).toLocaleDateString()}
+                      </span>
+                      <button
+                        onClick={() => handleRemoveWebsite(website.url)}
+                        className="text-[#4b5563] hover:text-[#dc2626] transition-colors p-1"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Brand Context Document Upload */}
         <div className="bg-white rounded-lg border border-[#e5e7eb] p-6">
-          <h2 className="text-xl font-semibold text-[#111827] mb-6">Brand Context Document</h2>
+          <div className="flex items-center gap-2 mb-2">
+            <FileText className="w-5 h-5 text-[#1e293b]" />
+            <h2 className="text-xl font-semibold text-[#111827]">Brand Documents</h2>
+          </div>
+          <p className="text-sm text-[#4b5563] mb-6">
+            Upload brand guidelines, pitch decks, or other documents to add to your brand context
+          </p>
           
           {uploadedDoc ? (
             <div className="space-y-3">

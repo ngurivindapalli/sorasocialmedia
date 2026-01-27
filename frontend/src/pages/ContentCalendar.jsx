@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { 
   Calendar, FileText, Video, Image, MessageSquare, 
-  BarChart, Users, Megaphone, ChevronRight, Play
+  BarChart, Users, Megaphone, ChevronRight, Play, ArrowLeft, Home
 } from 'lucide-react'
 import { contentCalendar, weekThemes } from '../data/contentCalendar'
 
@@ -38,6 +38,16 @@ function ContentCalendar() {
   return (
     <div className="min-h-screen bg-white p-8">
       <div className="max-w-6xl mx-auto">
+        {/* Back to Dashboard */}
+        <Link 
+          to="/dashboard"
+          className="inline-flex items-center gap-2 text-[#6b7280] hover:text-[#111827] transition-colors mb-6"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          <Home className="w-4 h-4" />
+          Back to Dashboard
+        </Link>
+
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-2">

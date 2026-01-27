@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Image, Download, Copy, FileText, Loader2, CheckCircle2, XCircle, Hash, LogIn, UserPlus, LogOut, Lightbulb, X, Info, Instagram, Linkedin, ExternalLink } from 'lucide-react'
 import { api, API_URL } from '../utils/api'
 import { authUtils } from '../utils/auth'
+import LoadingOverlay from '../components/LoadingOverlay'
 
 function MarketingPost() {
   const navigate = useNavigate()
@@ -247,7 +248,16 @@ function MarketingPost() {
   }
 
   return (
-    <div className="min-h-screen bg-white p-6">
+    <div className="min-h-screen bg-white p-6 relative">
+      {/* Loading Overlay for Image Generation */}
+      <LoadingOverlay 
+        isLoading={loading} 
+        type="image" 
+        message="Creating your marketing post..."
+        subMessage="Our AI is generating a custom image and crafting the perfect caption. This typically takes 15-30 seconds."
+        fullScreen={true}
+      />
+      
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="mb-8">

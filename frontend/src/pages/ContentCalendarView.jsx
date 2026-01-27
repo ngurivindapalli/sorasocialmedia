@@ -1,12 +1,16 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { 
   FileText, Copy, Check, ChevronRight, ChevronLeft, Share2, 
   Loader2, Image, Linkedin, Calendar, Video, AlertTriangle,
-  ArrowLeft, List
+  ArrowLeft, List, Eye, BookOpen
 } from 'lucide-react'
 import { api, API_URL } from '../utils/api'
 import { contentCalendar, getContentByDay, weekThemes } from '../data/contentCalendar'
+import LoadingOverlay from '../components/LoadingOverlay'
+
+// Cache for generated images - stored in memory and localStorage
+const IMAGE_CACHE_KEY = 'content_calendar_images'
 
 function ContentCalendarView() {
   const { day } = useParams()
@@ -22,6 +26,28 @@ function ContentCalendarView() {
   const [postingToLinkedIn, setPostingToLinkedIn] = useState(false)
   const [postSuccess, setPostSuccess] = useState(null)
   const [currentSlide, setCurrentSlide] = useState(0)
+  const [activeTab, setActiveTab] = useState('post') // 'post' or 'details'
+
+  // Load cached image from localStorage
+  const loadCachedImage = useCallback(() => {
+    try {
+      const cache = JSON.parse(localStorage.getItem(IMAGE_CACHE_KEY) || '{}')
+      return cache[currentDay] || null
+    } catch {
+      return null
+    }
+  }, [currentDay])
+
+  // Save image to cache
+  const saveCachedImage = useCallback((imageData) => {
+    try {
+      const cache = JSON.parse(localStorage.getItem(IMAGE_CACHE_KEY) || '{}')
+      cache[currentDay] = imageData
+      localStorage.setItem(IMAGE_CACHE_KEY, JSON.stringify(cache))
+    } catch (err) {
+      console.error('Error caching image:', err)
+    }
+  }, [currentDay])
 
   // Fetch LinkedIn connections on mount
   useEffect(() => {
@@ -37,13 +63,25 @@ function ContentCalendarView() {
     fetchConnections()
   }, [])
 
+  // Load cached image and auto-generate if on Post tab and no cache exists
+  useEffect(() => {
+    const cachedImage = loadCachedImage()
+    if (cachedImage) {
+      setGeneratedImage(cachedImage)
+    } else if (activeTab === 'post' && !content?.isVideo && !generatingImage && !generatedImage) {
+      // Auto-generate image when on Post tab and no cached image
+      handleGenerateImage()
+    }
+  }, [currentDay, activeTab])
+
   // Reset state when day changes
   useEffect(() => {
-    setGeneratedImage(null)
+    const cachedImage = loadCachedImage()
+    setGeneratedImage(cachedImage)
     setError(null)
     setPostSuccess(null)
     setCurrentSlide(0)
-  }, [currentDay])
+  }, [currentDay, loadCachedImage])
 
   if (!content) {
     return (
@@ -123,6 +161,13 @@ function ContentCalendarView() {
   }
 
   const handleGenerateImage = async () => {
+    // Check cache first
+    const cachedImage = loadCachedImage()
+    if (cachedImage) {
+      setGeneratedImage(cachedImage)
+      return
+    }
+
     setGeneratingImage(true)
     setError(null)
     setGeneratedImage(null)
@@ -141,10 +186,17 @@ function ContentCalendarView() {
         timeout: 120000
       })
 
+      let imageData = null
       if (response.data.image_url) {
-        setGeneratedImage(response.data.image_url)
+        imageData = response.data.image_url
       } else if (response.data.image_base64) {
-        setGeneratedImage(`data:image/png;base64,${response.data.image_base64}`)
+        imageData = `data:image/png;base64,${response.data.image_base64}`
+      }
+
+      if (imageData) {
+        setGeneratedImage(imageData)
+        // Save to cache to preserve credits
+        saveCachedImage(imageData)
       }
     } catch (err) {
       console.error('Error generating image:', err)
@@ -247,7 +299,16 @@ function ContentCalendarView() {
   const fullPost = generateFullPost()
 
   return (
-    <div className="min-h-screen bg-white p-8">
+    <div className="min-h-screen bg-white p-8 relative">
+      {/* Loading Overlay for Image Generation */}
+      <LoadingOverlay 
+        isLoading={generatingImage} 
+        type="image" 
+        message="Generating post image..."
+        subMessage="Creating a professional image for your LinkedIn post. This typically takes 15-30 seconds."
+        fullScreen={true}
+      />
+
       <div className="max-w-4xl mx-auto">
         {/* Navigation */}
         <div className="flex items-center justify-between mb-6">
@@ -278,7 +339,7 @@ function ContentCalendarView() {
         </div>
 
         {/* Header */}
-        <div className="mb-8">
+        <div className="mb-6">
           <div className="flex items-center gap-2 text-sm text-[#6b7280] mb-2">
             <Calendar className="w-4 h-4" />
             Week {content.week}: {weekTheme?.name}
@@ -288,6 +349,34 @@ function ContentCalendarView() {
           </h1>
           <p className="text-[#6b7280]">{weekTheme?.description}</p>
         </div>
+
+        {/* Post / Details Tab Toggle */}
+        {!content.isVideo && (
+          <div className="flex gap-2 mb-6 bg-[#f5f5f5] p-1 rounded-lg w-fit">
+            <button
+              onClick={() => setActiveTab('post')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md font-medium text-sm transition-all ${
+                activeTab === 'post'
+                  ? 'bg-white text-[#111827] shadow-sm'
+                  : 'text-[#6b7280] hover:text-[#111827]'
+              }`}
+            >
+              <Eye className="w-4 h-4" />
+              Post Preview
+            </button>
+            <button
+              onClick={() => setActiveTab('details')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md font-medium text-sm transition-all ${
+                activeTab === 'details'
+                  ? 'bg-white text-[#111827] shadow-sm'
+                  : 'text-[#6b7280] hover:text-[#111827]'
+              }`}
+            >
+              <BookOpen className="w-4 h-4" />
+              Details
+            </button>
+          </div>
+        )}
 
         {/* Video Warning */}
         {content.isVideo && (
@@ -301,6 +390,146 @@ function ContentCalendarView() {
             </div>
           </div>
         )}
+
+        {/* POST PREVIEW TAB */}
+        {activeTab === 'post' && !content.isVideo && (
+          <div className="space-y-6">
+            {/* LinkedIn Post Preview Card */}
+            <div className="bg-white border border-[#e5e7eb] rounded-xl shadow-lg overflow-hidden">
+              {/* Post Header */}
+              <div className="p-4 border-b border-[#e5e7eb]">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#1e293b] to-[#334155] flex items-center justify-center">
+                    <span className="text-white font-bold text-lg">A</span>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-[#111827]">AIGIS</h3>
+                    <p className="text-sm text-[#6b7280]">Company • LinkedIn Post Preview</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Post Image */}
+              <div className="aspect-square bg-[#f5f5f5] relative">
+                {generatedImage ? (
+                  <img 
+                    src={generatedImage.startsWith('http') || generatedImage.startsWith('data:') ? generatedImage : `${API_URL}${generatedImage}`}
+                    alt="Post preview"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full text-[#9ca3af]">
+                    <Image className="w-16 h-16 mb-3" />
+                    <p className="text-sm">Image will be generated automatically</p>
+                    {error && (
+                      <p className="text-red-500 text-sm mt-2 max-w-xs text-center">{error}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Post Caption */}
+              <div className="p-4">
+                <div className="text-[#111827] text-sm whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto">
+                  {fullPost.length > 500 ? fullPost.substring(0, 500) + '...' : fullPost}
+                </div>
+                <button
+                  onClick={() => copyToClipboard(fullPost)}
+                  className="mt-3 flex items-center gap-2 text-sm text-[#1e293b] hover:text-[#334155] transition-colors"
+                >
+                  {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  Copy Full Caption
+                </button>
+              </div>
+
+              {/* Post Actions */}
+              <div className="px-4 pb-4 space-y-3">
+                {generatedImage && (
+                  <>
+                    {/* Post to AIGIS Company Page - Primary Action */}
+                    <button
+                      onClick={handlePostToCompanyPage}
+                      disabled={postingToLinkedIn}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#0077b5] hover:bg-[#005885] text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {postingToLinkedIn ? (
+                        <>
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                          Posting to LinkedIn...
+                        </>
+                      ) : (
+                        <>
+                          <Linkedin className="w-5 h-5" />
+                          Post to AIGIS Company Page
+                        </>
+                      )}
+                    </button>
+
+                    {/* Download Image */}
+                    <a
+                      href={generatedImage.startsWith('http') || generatedImage.startsWith('data:') ? generatedImage : `${API_URL}${generatedImage}`}
+                      download="content-image.png"
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-[#f5f5f5] hover:bg-[#e5e7eb] text-[#111827] font-medium rounded-lg transition-colors"
+                    >
+                      <Image className="w-4 h-4" />
+                      Download Image
+                    </a>
+
+                    {/* Optional: Post to Personal Profile */}
+                    {linkedinConnections.length > 0 && (
+                      <button
+                        onClick={handlePostToLinkedIn}
+                        disabled={postingToLinkedIn}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-transparent border border-[#0077b5] text-[#0077b5] hover:bg-[#0077b5]/10 font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                      >
+                        <Linkedin className="w-4 h-4" />
+                        Post to Personal Profile
+                      </button>
+                    )}
+
+                    {postSuccess && (
+                      <div className="p-3 bg-green-100 border border-green-300 rounded-lg text-green-700 text-sm">
+                        <p className="font-medium">✓ Posted successfully!</p>
+                        {postSuccess.startsWith('http') && (
+                          <a 
+                            href={postSuccess} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-green-800 underline hover:no-underline mt-1 block"
+                          >
+                            View Post on LinkedIn →
+                          </a>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {!generatedImage && !generatingImage && (
+                  <button
+                    onClick={handleGenerateImage}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-medium rounded-lg transition-all"
+                  >
+                    <Image className="w-5 h-5" />
+                    Generate Image
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Cached Image Notice */}
+            {generatedImage && loadCachedImage() && (
+              <div className="flex items-center gap-2 text-sm text-[#6b7280] bg-[#f5f5f5] px-4 py-2 rounded-lg">
+                <Check className="w-4 h-4 text-green-600" />
+                Image cached - won't regenerate on next visit (saving credits)
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* DETAILS TAB - Only show when on details tab or for video content */}
+        {(activeTab === 'details' || content.isVideo) && (
+          <>
 
         {/* Special Notes */}
         {content.note && (
@@ -777,9 +1006,11 @@ function ContentCalendarView() {
                 </div>
               )}
             </div>
+          </>
+        )}
 
-            {/* Generated Image */}
-            {generatedImage && (
+            {/* Generated Image - Only show on Details tab if we have one */}
+            {activeTab === 'details' && generatedImage && (
               <div className="bg-white border border-[#e5e7eb] rounded-lg shadow-sm p-6 mb-6">
                 <h3 className="text-lg font-semibold text-[#111827] mb-4">Generated Image</h3>
                 <div className="rounded-lg overflow-hidden border border-[#e5e7eb]">

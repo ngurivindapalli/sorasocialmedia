@@ -111,7 +111,7 @@ class Mem0Service:
             try:
                 print(f"[Mem0] Initializing with config: {mem0_config}")
                 self.memory = Memory.from_config(mem0_config)
-                print(f"[Mem0] ✅ Successfully initialized with config")
+                print(f"[Mem0] SUCCESS: Initialized with config")
             except Exception as config_error:
                 # If S3 failed with invalid index name, try alternative index names
                 if vector_db == 's3_vectors' and "Invalid index name" in str(config_error):
@@ -134,7 +134,7 @@ class Mem0Service:
                                 }
                             }
                             self.memory = Memory.from_config(alt_config)
-                            print(f"[Mem0] ✅ Successfully initialized with index: {alt_index}")
+                            print(f"[Mem0] SUCCESS: Initialized with index: {alt_index}")
                             mem0_config = alt_config  # Update for logging
                             break
                         except Exception as alt_error:
@@ -144,7 +144,7 @@ class Mem0Service:
                             continue
                     else:
                         # All alternative indexes failed
-                        print(f"[Mem0] ❌ All index name attempts failed")
+                        print(f"[Mem0] ERROR: All index name attempts failed")
                         raise config_error
                 else:
                     # Other error or not S3 - try fallback
@@ -154,7 +154,7 @@ class Mem0Service:
                     
                     # If S3 was requested but failed, this is a problem
                     if vector_db == 's3_vectors':
-                        print(f"[Mem0] ❌ CRITICAL: S3 vector initialization failed! Memories will NOT persist.")
+                        print(f"[Mem0] CRITICAL ERROR: S3 vector initialization failed! Memories will NOT persist.")
                         print(f"[Mem0] Check: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET, AWS_REGION")
                         print(f"[Mem0] Bucket name: {aws_bucket}")
                         print(f"[Mem0] Region: {aws_region}")
@@ -162,7 +162,7 @@ class Mem0Service:
                         print(f"[Mem0] Secret key set: {bool(aws_secret_key)}")
                         
                         # Fallback to ChromaDB if S3 completely fails
-                        print(f"[Mem0] ⚠️ Falling back to ChromaDB (memories will NOT persist across restarts)")
+                        print(f"[Mem0] WARNING: Falling back to ChromaDB (memories will NOT persist across restarts)")
                         backend_dir = Path(__file__).parent.parent
                         chroma_persist_dir = backend_dir / "chroma_db"
                         chroma_persist_dir.mkdir(exist_ok=True)
@@ -180,13 +180,13 @@ class Mem0Service:
                         self.memory = Memory()
                     else:
                         self.memory = Memory()
-                        print(f"[Mem0] ⚠️ Using fallback initialization - persistence may be limited")
+                        print(f"[Mem0] WARNING: Using fallback initialization - persistence may be limited")
             
             self.available = True
             storage_type = "S3 (persistent)" if vector_db == 's3_vectors' else "ChromaDB (local)"
             print(f"[Mem0] OK Mem0 service initialized with {storage_type} storage")
             if vector_db == 's3_vectors':
-                print(f"[Mem0] ✅ Memories will persist across deployments and restarts")
+                print(f"[Mem0] SUCCESS: Memories will persist across deployments and restarts")
             
             # Verify S3 connection if using S3
             if vector_db == 's3_vectors' and self.available:
@@ -201,9 +201,9 @@ class Mem0Service:
                     )
                     # Try to head the bucket to verify access
                     s3_client.head_bucket(Bucket=aws_bucket)
-                    print(f"[Mem0] ✅ S3 bucket access verified: {aws_bucket}")
+                    print(f"[Mem0] SUCCESS: S3 bucket access verified: {aws_bucket}")
                 except Exception as s3_error:
-                    print(f"[Mem0] ⚠️ WARNING: Could not verify S3 bucket access: {s3_error}")
+                    print(f"[Mem0] WARNING: Could not verify S3 bucket access: {s3_error}")
                     print(f"[Mem0] Memories may not persist correctly. Check IAM permissions.")
             
         except Exception as e:

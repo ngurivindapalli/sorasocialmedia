@@ -7039,6 +7039,162 @@ async def get_memory_status():
         }
 
 
+# ===== BRAND WEBSITE ANALYSIS ENDPOINT =====
+
+@app.post("/api/brand/scrape-website")
+async def analyze_brand_website(
+    request: dict,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Analyze a brand's website and add the extracted information to brand context.
+    
+    Request body:
+    {
+        "url": "https://yourcompany.com"
+    }
+    """
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        url = request.get("url", "").strip()
+        if not url:
+            raise HTTPException(status_code=400, detail="URL is required")
+        
+        # Validate URL format
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(url)
+            if not parsed.scheme or not parsed.netloc:
+                raise ValueError("Invalid URL format")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid URL format. Please include http:// or https://")
+        
+        print(f"[API] Analyzing website: {url}")
+        
+        # Use web research service to scrape website content
+        import httpx
+        from bs4 import BeautifulSoup
+        
+        try:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+                }
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                html_content = response.text
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=400, detail=f"Failed to access website: {e.response.status_code}")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to connect to website: {str(e)}")
+        
+        # Parse HTML with BeautifulSoup
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Extract title
+        title = soup.title.string if soup.title else url
+        title = title.strip() if title else url
+        
+        # Extract meta description
+        meta_desc = soup.find('meta', attrs={'name': 'description'})
+        description = meta_desc.get('content', '') if meta_desc else ''
+        
+        # Extract meta keywords
+        meta_keywords = soup.find('meta', attrs={'name': 'keywords'})
+        keywords = meta_keywords.get('content', '') if meta_keywords else ''
+        
+        # Extract Open Graph data
+        og_title = soup.find('meta', property='og:title')
+        og_description = soup.find('meta', property='og:description')
+        og_site_name = soup.find('meta', property='og:site_name')
+        
+        # Extract main text content
+        # Remove script and style elements
+        for element in soup(['script', 'style', 'nav', 'header', 'footer', 'aside']):
+            element.decompose()
+        
+        # Get text from main content areas
+        main_content = soup.find('main') or soup.find('article') or soup.find('div', class_=['content', 'main', 'main-content']) or soup.body
+        
+        text_content = ""
+        if main_content:
+            # Get all paragraphs and headings
+            for elem in main_content.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'li']):
+                text = elem.get_text(strip=True)
+                if text and len(text) > 20:  # Filter out short snippets
+                    text_content += text + "\n\n"
+        
+        # Limit text content
+        text_content = text_content[:10000] if text_content else ""
+        
+        # Build brand context from scraped data
+        brand_context_parts = [
+            f"WEBSITE: {url}",
+            f"TITLE: {title}",
+        ]
+        
+        if og_site_name:
+            brand_context_parts.append(f"BRAND NAME: {og_site_name.get('content', '')}")
+        
+        if description or (og_description and og_description.get('content')):
+            desc = description or og_description.get('content', '')
+            brand_context_parts.append(f"DESCRIPTION: {desc}")
+        
+        if keywords:
+            brand_context_parts.append(f"KEYWORDS: {keywords}")
+        
+        if text_content:
+            brand_context_parts.append(f"\nWEBSITE CONTENT:\n{text_content}")
+        
+        brand_context_text = "\n".join(brand_context_parts)
+        
+        print(f"[API] Extracted {len(brand_context_text)} characters from website")
+        
+        # Save to memory service (unified brand context)
+        if not memory_service.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Memory service is not available. Please check S3 and Mem0 configuration."
+            )
+        
+        user_id = normalize_user_id(current_user)
+        print(f"[API] Saving website content to unified brand context for user: {user_id}")
+        
+        result = await memory_service.append_to_unified_brand_context(
+            user_id=user_id,
+            new_content=brand_context_text,
+            content_type="website"
+        )
+        
+        if result is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to save website content to brand context."
+            )
+        
+        resource_id = result.get("resource_id")
+        
+        return {
+            "success": True,
+            "url": url,
+            "title": title,
+            "description": description or (og_description.get('content', '') if og_description else ''),
+            "resource_id": resource_id,
+            "message": "Website analyzed and added to brand context successfully",
+            "content_length": len(brand_context_text)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error analyzing website: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to analyze website: {str(e)}")
+
+
 @app.get("/api/memory/documents")
 async def list_user_documents(
     current_user: User = Depends(get_current_user)
