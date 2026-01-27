@@ -413,9 +413,11 @@ class Mem0Service:
         try:
             # Strategy: Use multiple semantic queries to get diverse memories
             queries = [
+                "brand company business products services website",
+                "website content scraped homepage about",
                 "user background profession skills experience education",
-                "brand company business products services",
                 "documents uploaded content context",
+                "competitors competitive analysis market",
                 "*"  # Fallback: try to get all
             ]
             

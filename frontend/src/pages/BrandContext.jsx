@@ -967,15 +967,7 @@ function BrandContext() {
   ]
 
   return (
-    <div className="p-6 max-w-6xl mx-auto bg-white relative">
-      {/* Loading Overlay for Summaries */}
-      <LoadingOverlay 
-        isLoading={loadingSummaries} 
-        type="context" 
-        message="Gathering brand context..."
-        subMessage="Analyzing your documents and summarizing key brand information. This may take a moment."
-        fullScreen={true}
-      />
+    <div className="p-6 max-w-6xl mx-auto bg-white">
       
       <div className="mb-8">
         <h1 className="text-3xl font-semibold text-[#111827] mb-2 flex items-center gap-3">
@@ -986,7 +978,15 @@ function BrandContext() {
       </div>
 
       {/* Summary Tabs */}
-      <div className="mb-8 bg-white rounded-lg border border-[#e5e7eb] p-6">
+      <div className="mb-8 bg-white rounded-lg border border-[#e5e7eb] p-6 relative">
+        {/* Loading Overlay for Summaries - scoped to this section only */}
+        <LoadingOverlay 
+          isLoading={loadingSummaries} 
+          type="context" 
+          message="Gathering brand context..."
+          subMessage="Analyzing your documents and summarizing key brand information."
+        />
+        
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold text-[#111827]">Context Summary</h2>
           <button
