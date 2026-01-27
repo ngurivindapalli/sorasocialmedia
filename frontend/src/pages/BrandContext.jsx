@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { FileText, Upload, X, Search, Plus, AlertCircle, ChevronDown, ChevronUp, Link2, CheckCircle2, Loader2, BookOpen, Users, TrendingUp, BarChart3, Globe } from 'lucide-react'
+import { FileText, Upload, X, Search, Plus, AlertCircle, ChevronDown, ChevronUp, Link2, CheckCircle2, Loader2, BookOpen, Users, TrendingUp, BarChart3, Globe, Trash2, FolderOpen } from 'lucide-react'
 import { api } from '../utils/api'
 import { authUtils } from '../utils/auth'
 import LoadingOverlay from '../components/LoadingOverlay'
@@ -30,6 +30,9 @@ function BrandContext() {
   const [scrapingWebsite, setScrapingWebsite] = useState(false)
   const [scrapedWebsites, setScrapedWebsites] = useState([])
   const [websiteScrapeSuccess, setWebsiteScrapeSuccess] = useState('')
+  
+  // Context removal state
+  const [removingContextId, setRemovingContextId] = useState(null)
   
   // Integration state
   const [integrations, setIntegrations] = useState([])
@@ -894,10 +897,58 @@ function BrandContext() {
     }
   }
 
-  const handleRemoveWebsite = (urlToRemove) => {
-    const updated = scrapedWebsites.filter(w => w.url !== urlToRemove)
-    setScrapedWebsites(updated)
-    localStorage.setItem('videohook_scraped_websites', JSON.stringify(updated))
+  const handleRemoveWebsite = async (urlToRemove, resourceId = null) => {
+    setRemovingContextId(urlToRemove)
+    try {
+      // If we have a resourceId, try to delete from memory
+      if (resourceId) {
+        try {
+          await api.delete(`/api/memory/documents/${resourceId}`)
+          console.log('[BrandContext] Removed website context from memory:', resourceId)
+        } catch (err) {
+          console.error('Failed to remove website from memory:', err)
+          // Continue to remove from local state even if memory delete fails
+        }
+      }
+      
+      const updated = scrapedWebsites.filter(w => w.url !== urlToRemove)
+      setScrapedWebsites(updated)
+      localStorage.setItem('videohook_scraped_websites', JSON.stringify(updated))
+      
+      // Reload summaries after removal
+      setTimeout(async () => {
+        await loadSummaries()
+      }, 1000)
+    } finally {
+      setRemovingContextId(null)
+    }
+  }
+
+  const handleRemoveDocument = async (docId, resourceId = null) => {
+    setRemovingContextId(docId)
+    try {
+      // If we have a resourceId, try to delete from memory
+      if (resourceId) {
+        try {
+          await api.delete(`/api/memory/documents/${resourceId}`)
+          console.log('[BrandContext] Removed document from memory:', resourceId)
+        } catch (err) {
+          console.error('Failed to remove document from memory:', err)
+          // Continue to remove from local state even if memory delete fails
+        }
+      }
+      
+      const updated = sentDocuments.filter(d => d.id !== docId)
+      setSentDocuments(updated)
+      localStorage.setItem('videohook_sent_documents', JSON.stringify(updated))
+      
+      // Reload summaries after removal
+      setTimeout(async () => {
+        await loadSummaries()
+      }, 1000)
+    } finally {
+      setRemovingContextId(null)
+    }
   }
 
   if (loading) {
@@ -1128,10 +1179,15 @@ function BrandContext() {
                         Added {new Date(website.scrapedAt).toLocaleDateString()}
                       </span>
                       <button
-                        onClick={() => handleRemoveWebsite(website.url)}
-                        className="text-[#4b5563] hover:text-[#dc2626] transition-colors p-1"
+                        onClick={() => handleRemoveWebsite(website.url, website.resourceId)}
+                        disabled={removingContextId === website.url}
+                        className="text-[#4b5563] hover:text-[#dc2626] transition-colors p-1 disabled:opacity-50"
                       >
-                        <X className="w-4 h-4" />
+                        {removingContextId === website.url ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <X className="w-4 h-4" />
+                        )}
                       </button>
                     </div>
                   </div>
@@ -1204,6 +1260,105 @@ function BrandContext() {
             </div>
           )}
         </div>
+
+        {/* Uploaded Context Section */}
+        {(sentDocuments.length > 0 || scrapedWebsites.length > 0) && (
+          <div className="bg-white rounded-lg border border-[#e5e7eb] p-6">
+            <div className="flex items-center gap-2 mb-2">
+              <FolderOpen className="w-5 h-5 text-[#1e293b]" />
+              <h2 className="text-xl font-semibold text-[#111827]">Your Brand Context Sources</h2>
+            </div>
+            <p className="text-sm text-[#4b5563] mb-6">
+              Documents and websites you've added to your brand context. Remove any that are no longer relevant.
+            </p>
+
+            <div className="space-y-4">
+              {/* Uploaded Documents */}
+              {sentDocuments.length > 0 && (
+                <div>
+                  <p className="text-sm font-medium text-[#4b5563] mb-2 flex items-center gap-2">
+                    <FileText className="w-4 h-4" />
+                    Uploaded Documents ({sentDocuments.length})
+                  </p>
+                  <div className="space-y-2">
+                    {sentDocuments.map((doc, idx) => (
+                      <div
+                        key={doc.id || idx}
+                        className="flex items-center justify-between p-3 bg-[#f9fafb] border border-[#e5e7eb] rounded-lg"
+                      >
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <FileText className="w-4 h-4 text-[#1e293b] flex-shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-[#111827] truncate">
+                              {doc.name}
+                            </p>
+                            <p className="text-xs text-[#6b7280]">
+                              Added {new Date(doc.sentAt).toLocaleDateString()}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleRemoveDocument(doc.id, doc.resourceId)}
+                          disabled={removingContextId === doc.id}
+                          className="flex items-center gap-1 px-3 py-1.5 text-sm text-[#dc2626] hover:text-white hover:bg-[#dc2626] border border-[#dc2626] rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {removingContextId === doc.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-4 h-4" />
+                          )}
+                          <span className="hidden sm:inline">Remove</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Scraped Websites */}
+              {scrapedWebsites.length > 0 && (
+                <div>
+                  <p className="text-sm font-medium text-[#4b5563] mb-2 flex items-center gap-2">
+                    <Globe className="w-4 h-4" />
+                    Analyzed Websites ({scrapedWebsites.length})
+                  </p>
+                  <div className="space-y-2">
+                    {scrapedWebsites.map((website, idx) => (
+                      <div
+                        key={website.url || idx}
+                        className="flex items-center justify-between p-3 bg-[#f9fafb] border border-[#e5e7eb] rounded-lg"
+                      >
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <Globe className="w-4 h-4 text-[#1e293b] flex-shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-[#111827] truncate">
+                              {website.title || website.url}
+                            </p>
+                            <p className="text-xs text-[#6b7280] truncate">
+                              {website.url} • Added {new Date(website.scrapedAt).toLocaleDateString()}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleRemoveWebsite(website.url, website.resourceId)}
+                          disabled={removingContextId === website.url}
+                          className="flex items-center gap-1 px-3 py-1.5 text-sm text-[#dc2626] hover:text-white hover:bg-[#dc2626] border border-[#dc2626] rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {removingContextId === website.url ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-4 h-4" />
+                          )}
+                          <span className="hidden sm:inline">Remove</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Competitors Section */}
         <div className="bg-white rounded-lg border border-[#e5e7eb] p-6">
